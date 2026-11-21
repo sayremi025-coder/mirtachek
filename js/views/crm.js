@@ -102,7 +102,7 @@ function scenarioText() {
     return `${hello} Это «${brand}». Около недели назад вы смотрели ${p.type === 'service' ? 'услугу' : 'товар'} «${p.name}». ${offer} Ответьте на сообщение — ${p.type === 'service' ? 'запишем на удобное время' : 'забронируем товар за вами'}.`;
   }
   if (w.scenario === 'novelty') {
-    if (!p) return `${hello} В «${brand}» появились новинки — пришлем подборку под ваш автомобиль.`;
+    if (!p) return `${hello} В «${brand}» появились новинки — пришлем подборку тачек и сварочных товаров.`;
     return `${hello} В «${brand}» новинка: «${p.name}» — ${money(price)}.${p.description ? ' ' + p.description.slice(0, 160) : ''} ${p.type === 'service' ? 'Запись открыта.' : num(p.stock) > 0 ? `В наличии: ${num(p.stock)}.` : 'Доступно под заказ.'} Напишите, если интересно.`;
   }
   const docs = c.uid ? D.debtDocsForUid(c.uid) : [];

@@ -2,8 +2,11 @@
    Мир Тачек — конфигурация
    1. Firebase Console → Project settings → Your apps → Web app → Config.
       Вставьте значения в FIREBASE_CONFIG.
-   2. Впишите email владельца в ADMIN_EMAILS (и тот же email в firestore.rules).
-      Этот аккаунт при первом входе сразу станет администратором.
+   2. Первый администратор назначается в Firebase Console:
+      войдите на сайт (станете покупателем) → Firestore Database → users →
+      ваш документ → поле role = "admin". Дальше роли раздает он сам на сайте.
+      (Необязательно: можно вписать email в ADMIN_EMAILS и в firestore.rules —
+      тогда этот аккаунт станет админом при первом входе автоматически.)
    Пока FIREBASE_CONFIG пустой, сайт работает в демо-режиме (данные в браузере).
    ========================================================================= */
 
@@ -18,7 +21,7 @@ export const FIREBASE_CONFIG = {
   appId: '',
 };
 
-// Email владельца (нижний регистр). Должен совпадать со списком в firestore.rules
+// Необязательно. Email владельца (нижний регистр); если заполнен — должен совпадать со списком в firestore.rules
 export const ADMIN_EMAILS = [
   // 'owner@gmail.com',
 ];

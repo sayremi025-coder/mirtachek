@@ -60,7 +60,7 @@ Views.cart = {
             <label class="field"><span>Способ</span><select data-bind="checkout.partialVia">${opts(Object.entries(VIA), ck.partialVia)}</select></label>
           </div>
           <label class="field" id="ckBookingRow"><span>Желаемая дата и время записи на услугу</span><input type="datetime-local" data-bind="checkout.booking" value="${esc(ck.booking)}"></label>
-          <label class="field"><span>Комментарий</span><textarea rows="3" data-bind="checkout.comment" placeholder="Марка, модель, год авто, VIN, пожелания">${esc(ck.comment)}</textarea></label>
+          <label class="field"><span>Комментарий</span><textarea rows="3" data-bind="checkout.comment" placeholder="Размер колеса, объем кузова, марка электродов, пожелания">${esc(ck.comment)}</textarea></label>
           <div class="totals" id="ckTotals"></div>
           <div class="btn-col" id="ckButtons"></div>
         </form>

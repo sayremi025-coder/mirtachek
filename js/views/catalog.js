@@ -20,7 +20,7 @@ function priceBlock(p) {
   return `<div class="product__price">${money(p.retailPrice)}</div>`;
 }
 function stockLabel(p) {
-  if (p.type === 'service') return '<span class="stock stock--service">Услуга СТО</span>';
+  if (p.type === 'service') return '<span class="stock stock--service">Услуга</span>';
   return num(p.stock) > 0 ? `<span class="stock stock--ok">В наличии: ${num(p.stock)} ${esc(p.unit || 'шт')}</span>` : '<span class="stock stock--out">Под заказ</span>';
 }
 export function productCard(p, variant = 'catalog') {
@@ -64,9 +64,9 @@ function heroHTML() {
   if (!['guest', 'customer'].includes(r)) return '';
   return `<section class="hero">
     <div class="hero__text">
-      <span class="eyebrow">Автозапчасти · автотовары · СТО</span>
-      <h1>${esc(D.companyName())}: всё для автомобиля в одном месте</h1>
-      <p>Выберите товары или услуги, оформите заказ и договоритесь с нами в WhatsApp о самовывозе или доставке.</p>
+      <span class="eyebrow">Тачки для сада и дома · сварочные изделия</span>
+      <h1>${esc(D.companyName())}: тачки для сада и дома, сварочное оборудование</h1>
+      <p>Садовые и строительные тачки, колеса и запчасти к ним, сварочные аппараты, электроды и средства защиты. Оформите заказ и договоритесь с нами в WhatsApp о самовывозе или доставке.</p>
       <div class="btn-row">
         <button type="button" class="btn btn--primary" data-action="scroll-catalog">${icon('package')}Открыть каталог</button>
         <button type="button" class="btn btn--wa" data-action="wa-company">${icon('whatsapp')}Написать в WhatsApp</button>
@@ -106,11 +106,11 @@ Views.catalog = {
       <div class="grid" id="catalogGrid"></div>
       <div id="catalogPager"></div>
       ${['guest', 'customer'].includes(r) ? `<section class="panel request-panel">
-        <div><h2 class="panel__title">Нужна консультация или подбор запчасти?</h2><p class="muted">Оставьте заявку — мы перезвоним или напишем в WhatsApp.</p></div>
+        <div><h2 class="panel__title">Нужна консультация или подбор тачки, колеса, сварочника?</h2><p class="muted">Оставьте заявку — мы перезвоним или напишем в WhatsApp.</p></div>
         <form id="requestForm" class="request-form">
           <input type="text" name="name" placeholder="Ваше имя" required value="${esc((Data.profile || {}).name || '')}">
           <input type="tel" name="phone" placeholder="Телефон" required value="${esc((Data.profile || {}).phone || '')}">
-          <input type="text" name="text" placeholder="Марка, модель, год, что нужно" required>
+          <input type="text" name="text" placeholder="Что нужно: тачка, колесо, электроды, аппарат..." required>
           <button type="submit" class="btn btn--dark">${icon('send')}Отправить</button>
         </form></section>` : ''}`;
   },
@@ -170,7 +170,7 @@ export function openProduct(id, silent = false) {
       ${p.sku ? `<p class="muted">Артикул: ${esc(p.sku)}</p>` : ''}
       <p class="pmodal__desc">${esc(p.description || 'Описание пока не заполнено.')}</p>
       <dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${money(v)}</dd>`).join('')}
-        <dt>${isService ? 'Тип' : 'Наличие'}</dt><dd>${isService ? 'Услуга СТО, по записи' : num(p.stock) > 0 ? `${num(p.stock)} ${esc(p.unit || 'шт')}` : 'Под заказ'}</dd></dl>
+        <dt>${isService ? 'Тип' : 'Наличие'}</dt><dd>${isService ? 'Услуга, по записи' : num(p.stock) > 0 ? `${num(p.stock)} ${esc(p.unit || 'шт')}` : 'Под заказ'}</dd></dl>
       <div class="qty-row"><span class="muted">Количество</span>${stepper('modalQty', 1)}</div>
       <div class="btn-row">
         <button type="button" class="btn btn--primary" data-action="add-cart" data-id="${p.id}" data-qty-from="#modalQty">${icon(isService ? 'wrench' : 'cart')}${isService ? 'Записаться' : 'В корзину'}</button>

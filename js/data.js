@@ -15,8 +15,8 @@ const DEMO_USERS = [
   { uid: 'demo-admin', name: 'Администратор', email: 'admin@demo.local', role: 'admin', phone: '77000000000' },
   { uid: 'demo-dealer', name: 'Ахметов Ерлан', email: 'dealer@demo.local', role: 'dealer', phone: '77010000001' },
   { uid: 'demo-dealer2', name: 'Сериков Данияр', email: 'dealer2@demo.local', role: 'dealer', phone: '77010000002' },
-  { uid: 'demo-store', name: 'Автомир Центр', email: 'store@demo.local', role: 'store', phone: '77020000001' },
-  { uid: 'demo-store2', name: 'Авто Плюс', email: 'store2@demo.local', role: 'store', phone: '77020000002' },
+  { uid: 'demo-store', name: 'Хозмаг Центр', email: 'store@demo.local', role: 'store', phone: '77020000001' },
+  { uid: 'demo-store2', name: 'Сад и Дом', email: 'store2@demo.local', role: 'store', phone: '77020000002' },
   { uid: 'demo-customer', name: 'Покупатель Демо', email: 'client@demo.local', role: 'customer', phone: '77030000001' },
 ];
 

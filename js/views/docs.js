@@ -19,7 +19,7 @@ export function receiptHTML(d) {
   const k = DOC_KINDS[d.kind];
   return `<div class="receipt">
     <header class="receipt__head">
-      <div class="receipt__brand">${icon('logo')}<div><b>${esc(D.companyName())}</b><small>Автозапчасти · автотовары · СТО</small></div></div>
+      <div class="receipt__brand">${icon('logo')}<div><b>${esc(D.companyName())}</b><small>Тачки для сада и дома · сварочные изделия</small></div></div>
       <div class="receipt__no"><b id="modalTitle">${esc(k.title)} № ${esc(d.number)}</b><small>${esc(k.label)}</small><small>${fmtDateTime(d.createdAt)}</small></div>
     </header>
     <dl class="receipt__meta">

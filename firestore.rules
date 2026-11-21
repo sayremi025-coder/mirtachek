@@ -1,6 +1,8 @@
 rules_version = '2';
 // Мир Тачек — правила доступа Firestore.
-// ВАЖНО: впишите email владельца в bootstrapAdmin() — тот же, что в js/config.js → ADMIN_EMAILS.
+// Первый администратор назначается вручную в Firebase Console: users/{uid} → role = "admin"
+// (консоль не проверяет эти правила). Дальше роли раздает администратор на сайте.
+// Необязательно: email в bootstrapAdmin() сделает этот аккаунт админом при первом входе.
 service cloud.firestore {
   match /databases/{database}/documents {
 
