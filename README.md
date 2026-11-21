@@ -1,21 +1,16 @@
-# Мир Тачек PRO
+# Мир Тачек
+Веб-магазин тачек для дома и изделий сварочной мастерской: каталог, корзина, Google-вход, заявки на изготовление, заказы и базовая панель администратора.
 
-Проект с нуля: каталог товаров для дома, сварочные изделия, индивидуальные заявки, заказы, CRM, склад и отчёты.
+## Подключение
+1. Создайте проект Firebase и Web App.
+2. В Authentication включите Google и добавьте домен в Authorized domains.
+3. Создайте Firestore и Storage.
+4. Вставьте Web App config в `js/firebase.js`.
+5. Установите Firebase CLI, выполните `firebase login`, `firebase use --add`.
+6. Разверните правила и функцию: `firebase deploy --only firestore:rules,storage:rules,functions`.
 
-## Запуск
-Откройте `index.html` через локальный веб-сервер (например, VS Code Live Server) или разместите файлы на HTTPS-хостинге.
+## Первый администратор
+Сначала войдите через Google. Найдите UID пользователя в Authentication → Users. Через доверенную среду Firebase Admin SDK установите `users/UID` поле `role: "admin"`. Не публикуйте service account key. После этого администратор может назначать `buyer`, `dealer`, `store` прямо из панели.
 
-## Подключение Firebase LIVE
-1. Создайте проект в Firebase Console и зарегистрируйте Web App.
-2. Вставьте параметры Web App в `js/firebase.js` вместо `YOUR_*`.
-3. Включите Authentication (Google), Firestore Database и Storage.
-4. Опубликуйте `firestore.rules` и `storage.rules`.
-5. Установите Firebase CLI и выполните `firebase deploy --only firestore:rules,storage`.
-6. Для функций: `cd functions && npm install`, затем `firebase deploy --only functions`.
-7. Назначьте custom claim `admin=true` первому администратору доверенным способом через Firebase Admin SDK. Нельзя безопасно выдавать админскую роль из браузера.
-
-## Важное про LIVE
-`USE_DEMO = false`. Если конфигурация Firebase не заполнена, приложение честно работает в локальном режиме с localStorage-кэшем. Переключатель ролей предназначен для проверки интерфейса, а не для защиты доступа. В production следует использовать Firebase custom claims и callable Cloud Function `createOrder` для атомарного проведения заказов и списания остатков. Не считайте клиентский режим проведения защищённым бухгалтерским контуром до подключения этой функции.
-
-## Импорт
-Поля Excel/CSV/JSON: `name`, `type` (`product`/`service`), `category`, `description`, `retailPrice`, `storePrice`, `dealerPrice`, `costPrice`, `stock`, `imageUrl`, `isNew`.
+## Важно
+В целях безопасности правила Firestore запрещают клиенту самостоятельно менять роль. Назначение роли из браузера уже вызывает callable Cloud Function `setUserRole`; функция проверяет роль администратора и записывает историю изменений. Не вставляйте секреты в HTML/JS и не публикуйте ключи service account. Каталог содержит примерные позиции и цены — замените их фактическими данными.

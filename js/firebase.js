@@ -1,28 +1,10 @@
-/* Firebase LIVE configuration. Replace YOUR_* values with Firebase Web App config. */
-(() => {
-  "use strict";
-  window.USE_DEMO = false;
-  window.MIR_FIREBASE_CONFIG = {
-    apiKey: "AIzaSyBJTbCyZHbrijeglKQ9566136AtMlgKrtQ",
-  authDomain: "oybek-e501a.firebaseapp.com",
-  projectId: "oybek-e501a",
-  storageBucket: "oybek-e501a.firebasestorage.app",
-  messagingSenderId: "1042259919778",
-  appId: "1:1042259919778:web:93a4721870aff250d928fb"
-};
-  const c=window.MIR_FIREBASE_CONFIG;
-  window.MIR_FIREBASE_READY=false;
-  window.MIR_FIREBASE_ERROR="";
-  if(!c.apiKey||c.apiKey.startsWith("YOUR_")||!c.projectId||c.projectId.startsWith("YOUR_")){
-    window.MIR_FIREBASE_ERROR="Firebase не настроен. Заполните параметры в js/firebase.js.";
-    return;
-  }
-  try{
-    if(!firebase.apps.length)firebase.initializeApp(c);
-    window.MIR_AUTH=firebase.auth();
-    window.MIR_DB=firebase.firestore();
-    window.MIR_STORAGE=firebase.storage();
-    window.MIR_FIREBASE_READY=true;
-    window.MIR_DB.enablePersistence({synchronizeTabs:true}).catch(()=>{});
-  }catch(e){window.MIR_FIREBASE_ERROR=e.message;}
-})();
+// Вставьте конфигурацию Web App из Firebase Console.
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {getAuth,GoogleAuthProvider,signInWithPopup,onAuthStateChanged,signOut} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {getFirestore,doc,getDoc,setDoc,updateDoc,deleteDoc,collection,addDoc,getDocs,query,orderBy,limit,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import {getStorage,ref as storageRef,uploadBytes,getDownloadURL,deleteObject} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
+import {getFunctions,httpsCallable} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-functions.js";
+const config={apiKey:"YOUR_API_KEY",authDomain:"YOUR_PROJECT.firebaseapp.com",projectId:"YOUR_PROJECT_ID",storageBucket:"YOUR_PROJECT.appspot.com",messagingSenderId:"YOUR_SENDER_ID",appId:"YOUR_APP_ID"};
+export const ready=!Object.values(config).some(v=>v.startsWith("YOUR_"));
+let app,auth,db,functions,storage;if(ready){app=initializeApp(config);auth=getAuth(app);db=getFirestore(app);functions=getFunctions(app);storage=getStorage(app)}
+export {auth,db,functions,storage,storageRef,uploadBytes,getDownloadURL,deleteObject,httpsCallable,GoogleAuthProvider,signInWithPopup,onAuthStateChanged,signOut,doc,getDoc,setDoc,updateDoc,deleteDoc,collection,addDoc,getDocs,query,orderBy,limit,serverTimestamp};

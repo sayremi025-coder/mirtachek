@@ -1,85 +1,179 @@
-(() => {
-"use strict";
-const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const PAGE=8, key="mir-tachek-v1", uid=()=>crypto.randomUUID?crypto.randomUUID():"mt"+Date.now()+Math.random().toString(16).slice(2);
-const money=n=>new Intl.NumberFormat("ru-RU",{maximumFractionDigits:0}).format(Number(n)||0)+" ₸";
-const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const date=s=>s?new Date(s).toLocaleDateString("ru-RU"):"—";
-const seed=[
-{id:"p1",type:"product",name:"Стеллаж металлический",category:"Хранение",description:"Для дома, гаража и мастерской.",retailPrice:28500,storePrice:24500,dealerPrice:22000,costPrice:15500,stock:12,isNew:true},
-{id:"p2",type:"product",name:"Мангал разборный",category:"Для двора",description:"Усиленная металлическая конструкция.",retailPrice:19500,storePrice:16500,dealerPrice:15000,costPrice:9800,stock:8,isNew:true},
-{id:"p3",type:"product",name:"Дровница металлическая",category:"Для дома",description:"Для хранения дров у печи или камина.",retailPrice:14500,storePrice:12500,dealerPrice:11000,costPrice:7200,stock:15},
-{id:"p4",type:"product",name:"Подставка для цветов",category:"Интерьер",description:"Сварная подставка для растений.",retailPrice:8500,storePrice:7000,dealerPrice:6500,costPrice:3900,stock:20},
-{id:"p5",type:"product",name:"Полка настенная",category:"Хранение",description:"Для дома, гаража и мастерской.",retailPrice:6500,storePrice:5400,dealerPrice:4900,costPrice:3000,stock:24},
-{id:"p6",type:"service",name:"Изготовление ворот и калиток",category:"Сварочные работы",description:"По индивидуальным размерам.",retailPrice:0,storePrice:0,dealerPrice:0,costPrice:0,stock:0},
-{id:"p7",type:"service",name:"Сварочные работы",category:"Сварочные работы",description:"Изготовление и ремонт конструкций.",retailPrice:0,storePrice:0,dealerPrice:0,costPrice:0,stock:0}
+import * as F from "./firebase.js";
+
+const $ = s => document.querySelector(s);
+const money = n => Number(n) ? new Intl.NumberFormat("ru-RU").format(Number(n)) + " ₸" : "По запросу";
+const seedProducts = [
+  {id:"c1",category:"cart",name:"Тачка хозяйственная",description:"Для дома, двора и хозяйства.",price:28000,symbol:"▱",showInCarousel:true},
+  {id:"c2",category:"cart",name:"Усиленная металлическая тачка",description:"Прочная конструкция для регулярной работы.",price:42000,symbol:"▰",showInCarousel:true},
+  {id:"w1",category:"weld",name:"Металлическая полка",description:"Для мастерской, гаража и дома.",price:18000,symbol:"▤",showInCarousel:true},
+  {id:"w2",category:"weld",name:"Стеллаж на заказ",description:"Размеры и конфигурация под помещение.",price:35000,symbol:"▥",showInCarousel:false},
+  {id:"w3",category:"weld",name:"Сварная конструкция",description:"Изготовление по вашему эскизу.",price:0,symbol:"⌑",showInCarousel:false},
+  {id:"c3",category:"cart",name:"Садовая тележка",description:"Для участка и сезонных работ.",price:32000,symbol:"▱",showInCarousel:true}
 ];
-let db,role=localStorage.getItem("mt-role")||"customer",cart=JSON.parse(localStorage.getItem("mt-cart")||"[]"),fav=JSON.parse(localStorage.getItem("mt-fav")||"[]"),pages={},currentPage="catalog";
-const store={products:[],orders:[],production:[],materials:[],contacts:[],activities:[],settings:{company:"Мир Тачек",whatsapp:""}};
-class DataLayer{
- constructor(){this.fs=window.MIR_FIREBASE_READY?window.MIR_DB:null;this.auth=window.MIR_FIREBASE_READY?window.MIR_AUTH:null;this.storage=window.MIR_FIREBASE_READY?window.MIR_STORAGE:null;this.cache();}
- cache(){try{Object.assign(store,JSON.parse(localStorage.getItem(key))||{});}catch{}}
- persist(){localStorage.setItem(key,JSON.stringify(store));}
- list(n){return store[n]||[]}
- async load(n){if(this.fs){try{const snap=await this.fs.collection(n).get();if(!snap.empty)store[n]=snap.docs.map(d=>({id:d.id,...d.data()}));this.persist();}catch(e){console.warn("Offline cache used",e)}}return this.list(n)}
- async save(n,row){const r={...row,updatedAt:new Date().toISOString()};if(this.fs){const ref=this.fs.collection(n).doc(String(r.id||uid()));r.id=ref.id;await ref.set(r,{merge:true});}const a=this.list(n),i=a.findIndex(x=>x.id===r.id);i<0?a.unshift(r):a.splice(i,1,r);store[n]=a;this.persist();return r}
- async remove(n,id){if(this.fs)await this.fs.collection(n).doc(id).delete();store[n]=this.list(n).filter(x=>x.id!==id);this.persist()}
- async upload(file){if(!this.storage)throw Error("Firebase Storage не подключён.");const ref=this.storage.ref("catalog/"+Date.now()+"-"+file.name.replace(/[^a-z0-9._-]/gi,"_"));await ref.put(file);return ref.getDownloadURL()}
- async log(action,details){await this.save("activities",{id:uid(),action,details,createdAt:new Date().toISOString()})}
+let products = seedProducts.map(x=>({...x})), user=null, profile=null;
+let cart=JSON.parse(localStorage.getItem("mtcart")||"[]"), tab="users", carouselIndex=0, carouselTimer=null;
+let editingProductId=null;
+
+function toast(message){ const el=$("#msg"); if(el) el.textContent=message; else alert(message); }
+function safe(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function productImage(p){return p.imageUrl ? `<img src="${safe(p.imageUrl)}" alt="${safe(p.name)}" loading="lazy">` : `<span class="product-placeholder">${safe(p.symbol||"▱")}</span>`;}
+function productCard(p, featured=false){
+  const category=p.category==="cart"?"ТАЧКИ":"МЕТАЛЛОИЗДЕЛИЯ";
+  const content=`<div class="product-photo">${productImage(p)}</div><div class="info"><small>${category}</small><h3>${safe(p.name)}</h3><p>${safe(p.description||"")}</p><span class="price">${money(p.price)}</span><div class="product-actions"><button data-add="${safe(p.id)}">${Number(p.price)?"В корзину":"Уточнить"}</button>${p.productUrl?`<a class="details-link" href="${safe(p.productUrl)}" target="_blank" rel="noopener">Подробнее ↗</a>`:""}</div></div>`;
+  return `<article class="product ${featured?"carousel-product":""}">${content}</article>`;
 }
-const data=new DataLayer();
-function toast(t,error=false){const x=document.createElement("div");x.className="toast"+(error?" error":"");x.textContent=t;$("#toasts").append(x);setTimeout(()=>x.remove(),3500)}
-function price(p){return Number(p[role==="dealer"?"dealerPrice":role==="store"?"storePrice":"retailPrice"]||0)}
-function pageItems(items,name,el,draw){const pagesCount=Math.max(1,Math.ceil(items.length/PAGE));pages[name]=Math.min(pages[name]||1,pagesCount);const p=pages[name],part=items.slice((p-1)*PAGE,p*PAGE);el.innerHTML=part.length?draw(part):'<div class="empty">Нет записей для отображения</div>';const pager=$("#"+name+"-pages");if(pager)pager.innerHTML=items.length>PAGE?`<button data-p="${name}" data-n="${Math.max(1,p-1)}">Назад</button><span>Страница ${p} из ${pagesCount} · ${items.length} записей</span><button data-p="${name}" data-n="${Math.min(pagesCount,p+1)}">Далее</button>`:""}
-function table(head,rows){return `<table class="data"><thead><tr>${head.map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>${rows.length?rows.map(r=>`<tr>${r.map(x=>`<td>${x??""}</td>`).join("")}</tr>`).join(""):`<tr><td colspan="${head.length}">Нет данных</td></tr>`}</tbody></table>`}
-function typeName(t){return ({retail:"Розница",shipment:"Отгрузка",preorder:"Предзаказ",work:"Изготовление"})[t]||t}
-function renderCards(list){return list.map(p=>`<article class="card"><div class="photo">${p.imageUrl?`<img src="${esc(p.imageUrl)}" alt="${esc(p.name)}">`:"<span>МИР ТАЧЕК</span>"}<span class="tag">${p.isNew?"НОВИНКА":p.type==="service"?"УСЛУГА":"ТОВАР"}</span><button class="fav" data-fav="${p.id}">${fav.includes(p.id)?"♥":"♡"}</button></div><div class="cardbody"><div class="category">${esc(p.category)}</div><h3>${esc(p.name)}</h3><div class="desc">${esc(p.description)}</div><div class="cardbottom"><div><div class="price">${p.type==="service"&&!price(p)?"По запросу":money(price(p))}</div><div class="stock">${p.type==="service"?"Изготовление под заказ":"Остаток: "+(p.stock||0)}</div></div><div class="actions"><button data-detail="${p.id}">Подробнее</button><button class="add" data-add="${p.id}">В корзину</button></div></div></div></article>`).join("")}
-function renderCatalog(){const q=$("#search").value.toLowerCase(),type=$("#type").value,cat=$("#category").value,sort=$("#sort").value;let a=data.list("products").filter(p=>(type==="all"||p.type===type)&&(!cat||p.category===cat)&&[p.name,p.description,p.category].join(" ").toLowerCase().includes(q));a.sort((x,y)=>sort==="up"?price(x)-price(y):sort==="down"?price(y)-price(x):sort==="stock"?(y.stock||0)-(x.stock||0):String(y.createdAt||"").localeCompare(String(x.createdAt||"")));const cats=[...new Set(data.list("products").map(p=>p.category).filter(Boolean))];const old=$("#category").value;$("#category").innerHTML='<option value="">Все категории</option>'+cats.map(c=>`<option>${esc(c)}</option>`).join("");$("#category").value=cats.includes(old)?old:"";pageItems(a,"catalog",$("#catalog"),renderCards)}
-function renderFavorites(){const a=fav.map(id=>data.list("products").find(p=>p.id===id)).filter(Boolean);pageItems(a,"favorites",$("#favorites"),renderCards)}
-function persistCart(){localStorage.setItem("mt-cart",JSON.stringify(cart));localStorage.setItem("mt-fav",JSON.stringify(fav));$("#cart-count").textContent=cart.reduce((s,x)=>s+x.qty,0)}
-function addCart(id){const x=cart.find(x=>x.id===id);x?x.qty++:cart.push({id,qty:1});persistCart();renderCart();toast("Добавлено в корзину")}
-function total(){return cart.reduce((s,x)=>{const p=data.list("products").find(p=>p.id===x.id);return s+(p?price(p)*x.qty:0)},0)}
-function renderCart(){$("#cart-lines").innerHTML=cart.map(x=>{const p=data.list("products").find(p=>p.id===x.id);return p?`<div class="line"><div><b>${esc(p.name)}</b><p>${money(price(p))} × ${x.qty}</p><button data-q="${p.id}" data-d="-1">−</button> ${x.qty} <button data-q="${p.id}" data-d="1">+</button> <button data-remove="${p.id}">Удалить</button></div><b>${money(price(p)*x.qty)}</b></div>`:""}).join("")||'<div class="empty">Корзина пуста</div>';$("#total").textContent=money(total())}
-function showPage(n){currentPage=n;$$(".page").forEach(x=>x.classList.toggle("active",x.id==="page-"+n));$$("[data-page]").forEach(x=>x.classList.toggle("active",x.dataset.page===n));$("#sidebar").classList.remove("open");({catalog:renderCatalog,favorites:renderFavorites,cart:renderCart,orders:renderOrders,production:renderProduction,warehouse:renderWarehouse,crm:renderCRM,reports:renderReports,manage:renderManage,settings:renderSettings}[n]||(()=>{}))()}
-function renderOrders(){let a=data.list("orders"),f=$("#order-filter").value,d=$("#debt-filter").value,q=$("#order-search").value.toLowerCase();a=a.filter(o=>(f==="all"||o.type===f)&&(d==="all"||(d==="debt"?o.balance>0:o.balance<=0))&&[o.number,o.buyerName,o.phone].join(" ").toLowerCase().includes(q));a.sort((x,y)=>y.createdAt.localeCompare(x.createdAt));pageItems(a,"orders",$("#orders-table"),rows=>table(["Документ","Дата","Клиент","Тип","Сумма","Оплата","Статус","Действие"],rows.map(o=>[`<b>${esc(o.number)}</b>`,date(o.createdAt),esc(o.buyerName),typeName(o.type),money(o.total),o.balance>0?`<span class="status warn">Долг ${money(o.balance)}</span>`:"Оплачено",esc(o.status),`<button data-receipt="${o.id}">Чек</button> ${o.type==="shipment"&&o.status!=="Принят"?`<button data-accept="${o.id}">Приёмка</button>`:""}`])))}
-function renderProduction(){const a=data.list("production"),stages=["Новая заявка","Расчёт","Подтверждён","В работе","Готово","Выдано"],groups=[["Новая заявка","Расчёт"],["Подтверждён","В работе"],["Готово"],["Выдано"]];const p=Math.max(1,pages.production||1),part=a.slice((p-1)*PAGE,(p-1)*PAGE+PAGE);$("#production-board").innerHTML=groups.map(g=>`<div class="column"><h4>${g.join(" / ")}</h4>${part.filter(w=>g.includes(w.stage||stages[0])).map(w=>`<div class="work"><b>${esc(w.title)}</b><p>${esc(w.client)} · ${esc(w.phone)}<br>${w.width||"—"} × ${w.height||"—"} мм · ${w.qty} шт.</p>${role==="admin"?`<select data-stage="${w.id}">${stages.map(s=>`<option ${s===(w.stage||stages[0])?"selected":""}>${s}</option>`).join("")}</select>`:esc(w.stage||stages[0])}</div>`).join("")}</div>`).join("");pageItems(a,"production",document.createElement("div"),()=>"")}
-function stat(label,value,note){return `<div class="stat"><span>${label}</span><b>${value}</b><p class="muted">${note}</p></div>`}
-function renderWarehouse(){const a=data.list("materials"),v=a.reduce((s,x)=>s+x.qty*x.cost,0);$("#warehouse-stats").innerHTML=stat("Материалов",a.length,"Позиций")+stat("Склад по закупу",money(v),"Стоимость остатков");pageItems(a,"materials",$("#materials-table"),rows=>table(["Материал","Ед.","Кол-во","Закуп","Сумма"],rows.map(x=>[esc(x.name),x.unit,x.qty,money(x.cost),money(x.qty*x.cost)])))}
-function waLink(phone,msg){let n=String(phone||store.settings.whatsapp||"").replace(/\D/g,"");return n?"https://wa.me/"+n+"?text="+encodeURIComponent(msg):""}
-function renderCRM(){let a=data.list("contacts"),q=$("#crm-search").value.toLowerCase(),stage=$("#crm-stage").value;a=a.filter(c=>(stage==="all"||c.stage===stage)&&[c.name,c.phone,c.type].join(" ").toLowerCase().includes(q));pageItems(a,"contacts",$("#contacts"),rows=>rows.map(c=>`<div class="contact"><b>${esc(c.name)}</b><p>${esc(c.type)} · ${esc(c.phone)}</p><span class="status">${esc(c.stage)}</span><p>Задача: ${esc(c.task||"—")}</p><a target="_blank" href="${waLink(c.phone,"Здравствуйте, "+c.name+"! Пишем из компании Мир Тачек.")}">Открыть WhatsApp</a></div>`).join(""));$("#activity").innerHTML=data.list("activities").slice(-10).reverse().map(a=>`<p class="muted">${esc(a.action)} — ${esc(a.details)} · ${date(a.createdAt)}</p>`).join("")}
-function getReport(){const mode=$("#period").value,now=new Date(),from=new Date(now);if(mode==="day")from.setHours(0,0,0,0);if(mode==="week")from.setDate(now.getDate()-7);if(mode==="month")from.setDate(1);if(mode==="range")return data.list("orders").filter(o=>(!$("#from").value||new Date(o.createdAt)>=new Date($("#from").value))&&(!$("#to").value||new Date(o.createdAt)<=new Date($("#to").value+"T23:59:59")));return data.list("orders").filter(o=>mode==="all"||new Date(o.createdAt)>=from)}
-function renderReports(){const a=getReport().filter(o=>o.type!=="preorder"),rev=a.reduce((s,o)=>s+o.total,0),cost=a.reduce((s,o)=>s+o.costTotal,0),debt=a.reduce((s,o)=>s+o.balance,0),cash=a.filter(o=>o.paymentType==="cash").reduce((s,o)=>s+o.paid,0),transfer=a.filter(o=>o.paymentType==="transfer").reduce((s,o)=>s+o.paid,0),stock=data.list("products").reduce((s,p)=>s+(p.stock||0)*(p.costPrice||0),0);$("#report-stats").innerHTML=stat("Выручка",money(rev),"Продажи")+stat("Себестоимость",money(cost),"Себестоимость")+stat("Валовая прибыль",money(rev-cost),"До расходов")+stat("Наличные / перевод",money(cash+transfer),`Наличные ${money(cash)} · Перевод ${money(transfer)}`)+stat("Дебиторка",money(debt),"Остаток долгов")+stat("Склад по закупу",money(stock),"Текущий склад");pageItems(a,"report",$("#report-table"),rows=>table(["Документ","Дата","Клиент","Выручка","Себестоимость","Прибыль","Долг"],rows.map(o=>[o.number,date(o.createdAt),esc(o.buyerName),money(o.total),money(o.costTotal),money(o.total-o.costTotal),money(o.balance)])))}
-function renderManage(){let a=data.list("products"),q=$("#manage-search").value.toLowerCase();a=a.filter(p=>(p.name+" "+p.category).toLowerCase().includes(q));pageItems(a,"manage",$("#manage-table"),rows=>table(["Название","Тип","Розница","Магазин","Дилер","Закуп","Остаток","Действия"],rows.map(p=>[esc(p.name),p.type,money(p.retailPrice),money(p.storePrice),money(p.dealerPrice),money(p.costPrice),p.stock,`<button data-edit="${p.id}">Изменить</button> <button data-del="${p.id}">Удалить</button>`])))}
-function renderSettings(){$("#wa-number").value=store.settings.whatsapp||"";$("#company").value=store.settings.company||"Мир Тачек";$("#firebase-status").innerHTML=window.MIR_FIREBASE_READY?'<span class="status ok">Firebase подключён</span>':`<p class="muted">${esc(window.MIR_FIREBASE_ERROR)}</p>`}
-function receipt(o){$("#modal-content").innerHTML=`<div id="receipt"><small>МИР ТАЧЕК · ${typeName(o.type)}</small><h2>Документ ${esc(o.number)}</h2><p>Дата: ${date(o.createdAt)}<br>Клиент: ${esc(o.buyerName)}<br>Телефон: ${esc(o.phone)}<br>Дилер: ${esc(o.dealerName||"—")}</p>${table(["Позиция","Кол-во","Цена","Сумма"],o.items.map(x=>[esc(x.name),x.qty,money(x.price),money(x.qty*x.price)]))}<h3>Итого: ${money(o.total)}</h3><p>Оплачено: ${money(o.paid)} · Долг: ${money(o.balance)}</p><span class="status ${o.balance?"warn":"ok"}">${o.balance?"ЕСТЬ ДОЛГ":"ОПЛАЧЕНО"}</span></div><button class="primary full" id="print-receipt">Печать чека</button>`;$("#modal").showModal()}
-async function checkout(e){e.preventDefault();if(!cart.length)return toast("Корзина пуста",true);const type=$("#doc-type").value,delivery=$("#delivery").value;if(delivery==="delivery"&&!$("#address").value.trim())return toast("Укажите адрес доставки",true);const items=cart.map(x=>{const p=data.list("products").find(p=>p.id===x.id);return p?{id:p.id,name:p.name,qty:x.qty,price:price(p),cost:p.costPrice||0,type:p.type}:null}).filter(Boolean),sum=items.reduce((s,x)=>s+x.price*x.qty,0),cost=items.reduce((s,x)=>s+x.cost*x.qty,0),pay=$("#payment").value,paid=pay==="debt"?0:pay==="partial"?Math.min(sum,Number($("#paid").value||0)):sum;const order={id:uid(),number:"MT-"+Date.now().toString().slice(-8),type,buyerName:$("#buyer").value,phone:$("#phone").value,storeName:$("#store-name").value,dealerName:$("#dealer-name").value,delivery,address:$("#address").value,paymentType:pay,paid,balance:sum-paid,total:sum,costTotal:cost,items,status:type==="preorder"?"Предзаказ":"Новый",comment:$("#comment").value,createdAt:new Date().toISOString(),ownerUid:data.auth?.currentUser?.uid||null};try{if(type!=="preorder")for(const x of items){const p=data.list("products").find(p=>p.id===x.id);if(p&&p.type==="product"){if(p.stock<x.qty)throw Error("Недостаточно остатка: "+p.name);await data.save("products",{...p,stock:p.stock-x.qty})}}await data.save("orders",order);if(!data.list("contacts").some(c=>c.phone===$("#phone").value))await data.save("contacts",{id:uid(),name:$("#buyer").value,phone:$("#phone").value,type:role==="store"?"Магазин":"Покупатель",stage:"Заказ",task:"Связаться по заказу"});await data.log("Создан документ",order.number+" · "+order.buyerName);cart=[];persistCart();renderCart();renderCatalog();receipt(order);toast("Документ оформлен")}catch(err){toast(err.message,true)}}
-function openEditor(p){$("#product-form").reset();$("#pid").value=p?.id||"";$("#editor-heading").textContent=p?"Редактирование":"Новая позиция";$("#p-type").value=p?.type||"product";$("#p-category").value=p?.category||"";$("#p-name").value=p?.name||"";$("#p-description").value=p?.description||"";$("#p-retail").value=p?.retailPrice||0;$("#p-store").value=p?.storePrice||0;$("#p-dealer").value=p?.dealerPrice||0;$("#p-cost").value=p?.costPrice||0;$("#p-stock").value=p?.stock||0;$("#p-image").value=p?.imageUrl||"";$("#p-new").checked=!!p?.isNew;$("#editor").showModal()}
-function openWhatsApp(phone,msg){const u=waLink(phone,msg);if(!u)return toast("Добавьте номер WhatsApp в настройках или карточке клиента",true);window.open(u,"_blank","noopener")}
-function exportRows(rows,name,xlsx){if(xlsx&&window.XLSX){const w=XLSX.utils.book_new();XLSX.utils.book_append_sheet(w,XLSX.utils.json_to_sheet(rows),"Данные");XLSX.writeFile(w,name);return}const keys=Object.keys(rows[0]||{}),csv=[keys.join(";"),...rows.map(r=>keys.map(k=>'"'+String(r[k]??"").replace(/"/g,'""')+'"').join(";"))].join("\r\n");const a=document.createElement("a"),url=URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"}));a.href=url;a.download=name.replace(/\.xlsx$/,".csv");a.click();URL.revokeObjectURL(url)}
-function bind(){
-document.addEventListener("click",async e=>{let b=e.target.closest("[data-page]");if(b){e.preventDefault();showPage(b.dataset.page);return}b=e.target.closest("[data-add]");if(b){addCart(b.dataset.add);return}b=e.target.closest("[data-fav]");if(b){fav=fav.includes(b.dataset.fav)?fav.filter(x=>x!==b.dataset.fav):[...fav,b.dataset.fav];persistCart();renderCatalog();renderFavorites();return}b=e.target.closest("[data-q]");if(b){const x=cart.find(x=>x.id===b.dataset.q);x.qty+=Number(b.dataset.d);if(x.qty<1)cart=cart.filter(y=>y!==x);persistCart();renderCart();return}b=e.target.closest("[data-remove]");if(b){cart=cart.filter(x=>x.id!==b.dataset.remove);persistCart();renderCart();return}b=e.target.closest("[data-p]");if(b){pages[b.dataset.p]=Number(b.dataset.n);({catalog:renderCatalog,favorites:renderFavorites,orders:renderOrders,production:renderProduction,materials:renderWarehouse,contacts:renderCRM,report:renderReports,manage:renderManage}[b.dataset.p]||(()=>{}))();return}b=e.target.closest("[data-detail]");if(b){const p=data.list("products").find(x=>x.id===b.dataset.detail);$("#modal-content").innerHTML=`<h2>${esc(p.name)}</h2><p>${esc(p.description)}</p><h2>${p.type==="service"?"Стоимость по запросу":money(price(p))}</h2><button class="primary full" data-add="${p.id}">Добавить в корзину</button><button class="whatsapp full" data-wa-item="${p.id}">Уточнить в WhatsApp</button>`;$("#modal").showModal();return}b=e.target.closest("[data-wa-item]");if(b){const p=data.list("products").find(x=>x.id===b.dataset.waItem);openWhatsApp("",`Здравствуйте! Интересует ${p.name} в Мир Тачек.`);return}b=e.target.closest("[data-receipt]");if(b){receipt(data.list("orders").find(x=>x.id===b.dataset.receipt));return}b=e.target.closest("[data-accept]");if(b){const o=data.list("orders").find(x=>x.id===b.dataset.accept),method=prompt("Введите cash — принял за наличные, debt — принял в долг, transfer — перевод","cash");if(method){await data.save("orders",{...o,status:"Принят",acceptance:method});renderOrders()}return}b=e.target.closest("[data-stage]");if(b){const w=data.list("production").find(x=>x.id===b.dataset.stage);await data.save("production",{...w,stage:b.value});renderProduction();return}b=e.target.closest("[data-edit]");if(b){openEditor(data.list("products").find(x=>x.id===b.dataset.edit));return}b=e.target.closest("[data-del]");if(b&&confirm("Удалить товар?")){await data.remove("products",b.dataset.del);renderManage();renderCatalog();return}b=e.target.closest("[data-scenario]");if(b){const c=data.list("contacts")[0];if(!c)return toast("Сначала добавьте контакт",true);const msgs={viewed:`Здравствуйте, ${c.name}! Вы недавно интересовались товарами Мир Тачек. Для вас есть специальное предложение.`,new:`Здравствуйте, ${c.name}! В каталоге Мир Тачек появились новинки для дома и изделия сварочного цеха.`,debt:`Здравствуйте, ${c.name}! Предлагаем сверить взаиморасчёты по заказам Мир Тачек.`};openWhatsApp(c.phone,msgs[b.dataset.scenario]);data.log("WhatsApp сценарий",b.dataset.scenario+" / "+c.name);return}if(e.target.id==="print-receipt"){const w=window.open("","_blank");w.document.write("<html><body>"+$("#receipt").innerHTML+"</body></html>");w.document.close();w.print()}}
-);
-$("#role").value=role;$("#role").onchange=e=>{role=e.target.value;localStorage.setItem("mt-role",role);document.body.classList.toggle("is-admin",role==="admin");showPage(currentPage);toast("Режим: "+e.target.selectedOptions[0].text)};
-$("#menu").onclick=()=>$("#sidebar").classList.toggle("open");
-$("#login").onclick=async()=>{if(!data.auth)return toast("Настройте Firebase для входа",true);try{await data.auth.signInWithPopup(new firebase.auth.GoogleAuthProvider())}catch(e){toast(e.message,true)}};
-["search","type","category","sort"].forEach(id=>$("#"+id).oninput=renderCatalog);["order-filter","debt-filter","order-search"].forEach(id=>$("#"+id).oninput=renderOrders);["crm-search","crm-stage"].forEach(id=>$("#"+id).oninput=renderCRM);$("#manage-search").oninput=renderManage;
-$("#checkout").onsubmit=checkout;$("#delivery").onchange=e=>$("#address-wrap").hidden=e.target.value!=="delivery";$("#payment").onchange=e=>$("#paid-wrap").hidden=e.target.value!=="partial";
-$("#order-wa").onclick=()=>{if(!cart.length)return toast("Корзина пуста",true);openWhatsApp($("#phone").value,`Здравствуйте! Заказ в Мир Тачек:\n${cart.map(x=>{const p=data.list("products").find(p=>p.id===x.id);return p?p.name+" × "+x.qty:""}).join("\n")}\nИтого: ${money(total())}`)};
-$("#work-form").onsubmit=async e=>{e.preventDefault();const w={id:uid(),title:$("#work-title").value,width:Number($("#work-width").value),height:Number($("#work-height").value),qty:Number($("#work-qty").value||1),color:$("#work-color").value,details:$("#work-details").value,photoUrl:$("#work-photo").value,client:$("#work-client").value,phone:$("#work-phone").value,deadline:$("#deadline").value,stage:"Новая заявка",createdAt:new Date().toISOString()};await data.save("production",w);await data.save("contacts",{id:uid(),name:w.client,phone:w.phone,type:"Покупатель",stage:"Новый",task:"Рассчитать изготовление"});data.log("Новая заявка цеха",w.title);e.target.reset();renderProduction();toast("Заявка отправлена")};
-$("#new-product").onclick=()=>openEditor();$("#product-form").onsubmit=async e=>{e.preventDefault();const id=$("#pid").value||uid(),old=data.list("products").find(x=>x.id===id)||{};const p={...old,id,type:$("#p-type").value,category:$("#p-category").value,name:$("#p-name").value,description:$("#p-description").value,retailPrice:+$("#p-retail").value,storePrice:+$("#p-store").value,dealerPrice:+$("#p-dealer").value,costPrice:+$("#p-cost").value,stock:+$("#p-stock").value,imageUrl:$("#p-image").value,isNew:$("#p-new").checked,createdAt:old.createdAt||new Date().toISOString()};await data.save("products",p);$("#editor").close();renderManage();renderCatalog();toast("Позиция сохранена")};
-$("#add-material").onclick=async()=>{const name=prompt("Материал");if(!name)return;await data.save("materials",{id:uid(),name,unit:prompt("Единица","шт"),qty:+prompt("Количество","0"),cost:+prompt("Цена закупа","0")});renderWarehouse()};
-$("#add-contact").onclick=()=>{$("#modal-content").innerHTML=`<h2>Новый контакт</h2><form id="contact-form"><label>Имя<input id="cn" required></label><label>Телефон<input id="cp" required></label><label>Тип<select id="ct"><option>Покупатель</option><option>Магазин</option><option>Дилер</option></select></label><label>Этап<select id="cs"><option>Новый</option><option>Переговоры</option><option>Заказ</option><option>Постоянный</option><option>Долг</option></select></label><label>Задача<input id="ctask"></label><button class="primary full">Сохранить</button></form>`;$("#modal").showModal()};
-$("#modal").onsubmit=async e=>{if(e.target.id==="contact-form"){e.preventDefault();await data.save("contacts",{id:uid(),name:$("#cn").value,phone:$("#cp").value,type:$("#ct").value,stage:$("#cs").value,task:$("#ctask").value});$("#modal").close();renderCRM()}};
-$("#period").onchange=e=>{const v=e.target.value==="range";$("#from").hidden=!v;$("#to").hidden=!v};$("#apply-report").onclick=renderReports;
-$("#xlsx").onclick=()=>exportRows(getReport(),"mir-tachek-report.xlsx",true);$("#csv").onclick=()=>exportRows(getReport(),"mir-tachek-report.csv",false);$("#print").onclick=()=>window.print();
-$("#dealer-report").onclick=()=>{const a=data.list("orders").filter(o=>o.dealerName),sum=a.reduce((s,o)=>s+o.total,0),debt=a.reduce((s,o)=>s+o.balance,0);$("#modal-content").innerHTML=`<h2>Отчёт дилеров</h2>${stat("Отгружено",money(sum),"Общая сумма")}${stat("В долг",money(debt),"Дебиторская задолженность")}`;$("#modal").showModal()};
-$("#import").onclick=()=>$("#file").click();$("#file").onchange=async e=>{const f=e.target.files[0];if(!f)return;try{let rows;if(f.name.endsWith(".json"))rows=JSON.parse(await f.text());else if(f.name.endsWith(".csv")){const t=await f.text();rows=t.split(/\r?\n/).slice(1).filter(Boolean).map(l=>{const c=l.split(";");return {name:c[0],type:c[1],category:c[2],retailPrice:+c[3],storePrice:+c[4],dealerPrice:+c[5],costPrice:+c[6],stock:+c[7],description:c[8]}})}else{const w=XLSX.read(await f.arrayBuffer());rows=XLSX.utils.sheet_to_json(w.Sheets[w.SheetNames[0]])}for(const r of rows)if(r.name||r["Название"])await data.save("products",{id:r.id||uid(),type:r.type||"product",name:r.name||r["Название"],category:r.category||r["Категория"]||"Импорт",description:r.description||r["Описание"]||"",retailPrice:+(r.retailPrice??r["Розница"]??0),storePrice:+(r.storePrice??r["Магазин"]??0),dealerPrice:+(r.dealerPrice??r["Дилер"]??0),costPrice:+(r.costPrice??r["Себестоимость"]??0),stock:+(r.stock??r["Остаток"]??0),imageUrl:r.imageUrl||"",isNew:!!r.isNew});renderManage();renderCatalog();toast("Импорт завершён")}catch(err){toast("Ошибка импорта: "+err.message,true)}e.target.value=""};
-$("#export").onclick=()=>{const a=document.createElement("a"),url=URL.createObjectURL(new Blob([JSON.stringify(data.list("products"),null,2)],{type:"application/json"}));a.href=url;a.download="mir-tachek-catalog.json";a.click();URL.revokeObjectURL(url)};
-$("#template").onclick=()=>exportRows([{name:"Название",type:"product",category:"Товары для дома",description:"Описание",retailPrice:10000,storePrice:8500,dealerPrice:7500,costPrice:5000,stock:10}], "mir-tachek-template.xlsx",true);
-$("#save-settings").onclick=()=>{store.settings={company:$("#company").value,whatsapp:$("#wa-number").value.replace(/\D/g,"")};data.persist();toast("Настройки сохранены")};
-$("#sync").onclick=async()=>{for(const n of ["products","orders","production","materials","contacts","activities"])await data.load(n);toast("Синхронизация завершена");showPage(currentPage)};
-$$("[data-scroll]").forEach(b=>b.onclick=()=>$(b.dataset.scroll).scrollIntoView({behavior:"smooth"}));
+function draw(filter="all"){
+  const shown=products.filter(p=>filter==="all"||p.category===filter);
+  $("#products").innerHTML=shown.map(p=>productCard(p)).join("")||'<p class="empty-state">Товары пока не добавлены.</p>';
+  drawCarousel();
 }
-async function init(){if(!store.products?.length)store.products=seed;if(!store.materials?.length)store.materials=[{id:"m1",name:"Профильная труба 40×20",unit:"м",qty:120,cost:950},{id:"m2",name:"Листовой металл 2 мм",unit:"м²",qty:35,cost:4200},{id:"m3",name:"Электроды",unit:"кг",qty:18,cost:1800}];["orders","production","contacts","activities"].forEach(n=>store[n]||=[]);data.persist();for(const n of ["products","orders","production","materials","contacts","activities"])await data.load(n);bind();persistCart();document.body.classList.toggle("is-admin",role==="admin");showPage("catalog");const online=()=>{$("#dot").className=window.MIR_FIREBASE_READY&&navigator.onLine?"online":"";$("#connection").textContent=!navigator.onLine?"Оффлайн · локальное зеркало":window.MIR_FIREBASE_READY?"Firebase LIVE":"Локальный кэш · Firebase не настроен"};window.addEventListener("online",online);window.addEventListener("offline",online);online();if(data.auth)data.auth.onAuthStateChanged(u=>{$("#login").textContent=u?(u.displayName||"Аккаунт"):"Войти"});else toast("Для LIVE-режима заполните js/firebase.js") }
-init().catch(e=>{console.error(e);toast("Ошибка запуска: "+e.message,true)});
-})();
+function drawCarousel(){
+  const host=$("#productCarousel"); if(!host)return;
+  const featured=products.filter(p=>p.showInCarousel!==false);
+  if(!featured.length){host.innerHTML='<p class="empty-state">Администратор пока не добавил товары в карусель.</p>';$("#carouselDots").innerHTML="";return;}
+  if(carouselIndex>=featured.length)carouselIndex=0;
+  host.innerHTML=featured.map(p=>productCard(p,true)).join("");
+  const cards=[...host.children];
+  cards.forEach((card,i)=>card.style.transform=`translateX(calc(${(i-carouselIndex)*100}% + ${(i-carouselIndex)*18}px))`);
+  $("#carouselDots").innerHTML=featured.map((_,i)=>`<button class="${i===carouselIndex?"active":""}" data-dot="${i}" aria-label="Товар ${i+1}"></button>`).join("");
+}
+function moveCarousel(step){
+  const count=products.filter(p=>p.showInCarousel!==false).length;
+  if(!count)return; carouselIndex=(carouselIndex+step+count)%count; drawCarousel();
+}
+function startCarousel(){stopCarousel();carouselTimer=setInterval(()=>moveCarousel(1),4200);}
+function stopCarousel(){if(carouselTimer)clearInterval(carouselTimer);carouselTimer=null;}
+function drawCart(){
+  const n=cart.reduce((a,x)=>a+x.qty,0);$("#count").textContent=n;
+  $("#cartLines").innerHTML=cart.map(x=>`<div class="line"><span>${safe(x.name)} × ${x.qty} — ${money(x.price*x.qty)}</span><button data-del="${safe(x.id)}">×</button></div>`).join("")||"Корзина пуста";
+  $("#total").textContent="Итого: "+money(cart.reduce((a,x)=>a+x.price*x.qty,0));
+  localStorage.setItem("mtcart",JSON.stringify(cart));
+}
+async function loadProducts(){
+  if(!F.ready){draw();return;}
+  try{
+    const snap=await F.getDocs(F.collection(F.db,"products"));
+    if(!snap.empty) products=snap.docs.map(d=>({id:d.id,...d.data()}));
+    draw();
+  }catch(e){console.error("Не удалось загрузить товары:",e);draw();}
+}
+async function signIn(){
+  if(!F.ready){toast("Сначала заполните Firebase config в js/firebase.js");return;}
+  try{const r=await F.signInWithPopup(F.auth,new F.GoogleAuthProvider());user=r.user;await ensureUser(user);authUi();}
+  catch(e){toast("Ошибка входа: "+e.message);}
+}
+async function ensureUser(u){
+  const r=F.doc(F.db,"users",u.uid),s=await F.getDoc(r);
+  if(!s.exists())await F.setDoc(r,{uid:u.uid,name:u.displayName||"",email:u.email||"",photoURL:u.photoURL||"",role:"buyer",blocked:false,createdAt:F.serverTimestamp(),lastLoginAt:F.serverTimestamp()});
+  else await F.updateDoc(r,{lastLoginAt:F.serverTimestamp()});
+  profile=(await F.getDoc(r)).data();
+}
+function authUi(){
+  if(user){$("#login").textContent=profile?.name||"Аккаунт";$("#login").onclick=()=>profile?.role==="admin"?openAdmin():toast("Вы вошли как покупатель");}
+  else{$("#login").textContent="Войти через Google";$("#login").onclick=signIn;}
+}
+async function order(){
+  if(!user){await signIn();return;} if(!cart.length)return toast("Корзина пуста");
+  if(profile?.blocked)return toast("Аккаунт заблокирован");
+  try{await F.addDoc(F.collection(F.db,"orders"),{uid:user.uid,customerName:profile.name,email:user.email,items:cart,total:cart.reduce((a,x)=>a+x.price*x.qty,0),status:"new",createdAt:F.serverTimestamp()});cart=[];drawCart();$("#cart").classList.add("hidden");toast("Заказ отправлен");}
+  catch(e){toast("Ошибка: "+e.message);}
+}
+async function request(e){
+  e.preventDefault();if(!user){await signIn();return;}
+  const data=Object.fromEntries(new FormData(e.target));
+  try{await F.addDoc(F.collection(F.db,"requests"),{...data,uid:user.uid,email:user.email,status:"new",createdAt:F.serverTimestamp()});e.target.reset();toast("Заявка отправлена");}
+  catch(err){toast(err.message);}
+}
+async function openAdmin(){if(profile?.role!=="admin")return toast("Нет доступа");$("#admin").classList.remove("hidden");await renderAdmin();}
+async function renderAdmin(){
+  if(tab==="products"){renderProductAdmin();return;}
+  const col=tab==="users"?"users":tab==="orders"?"orders":"requests";
+  try{
+    const s=await F.getDocs(F.query(F.collection(F.db,col),F.orderBy("createdAt","desc"),F.limit(100)));
+    const a=s.docs.map(d=>({id:d.id,...d.data()}));
+    if(tab==="users")$("#adminContent").innerHTML=`<table class="admin-table"><tr><th>Имя</th><th>Email</th><th>Роль</th><th>Статус</th></tr>${a.map(x=>`<tr><td>${safe(x.name)}</td><td>${safe(x.email)}</td><td><select data-role="${x.id}" ${x.role==="admin"?"disabled":""}><option value="buyer" ${x.role==="buyer"?"selected":""}>Покупатель</option><option value="dealer" ${x.role==="dealer"?"selected":""}>Дилер</option><option value="store" ${x.role==="store"?"selected":""}>Магазин</option></select></td><td>${x.blocked?"Заблокирован":"Активен"}</td></tr>`).join("")}</table>`;
+    else $("#adminContent").innerHTML=`<table class="admin-table"><tr><th>ID</th><th>Клиент</th><th>Статус</th></tr>${a.map(x=>`<tr><td>${x.id.slice(0,10)}</td><td>${safe(x.customerName||x.name||x.email||"—")}</td><td>${safe(x.status||"—")}</td></tr>`).join("")}</table>`;
+  }catch(e){$("#adminContent").textContent="Ошибка загрузки: "+e.message;}
+}
+function renderProductAdmin(){
+  $("#adminContent").innerHTML=`
+    <div class="admin-products-head"><div><h3>Управление товарами</h3><p>Добавляйте товары, фотографии и ссылки. Отмечайте товары для главной карусели.</p></div><button id="newProduct" class="cta">＋ Добавить товар</button></div>
+    <form id="productForm" class="product-form hidden">
+      <h3 id="productFormTitle">Новый товар</h3>
+      <div class="form-grid">
+        <label>Название<input name="name" required maxlength="100" placeholder="Например, тачка усиленная"></label>
+        <label>Категория<select name="category"><option value="cart">Тачки</option><option value="weld">Металлоизделия</option></select></label>
+        <label>Цена, ₸<input name="price" type="number" min="0" step="1" value="0"></label>
+        <label>Ссылка на товар<input name="productUrl" type="url" placeholder="https://..."></label>
+        <label class="full">Описание<textarea name="description" rows="3" maxlength="1000" placeholder="Описание товара"></textarea></label>
+        <label class="full">Фотография товара<input name="imageFile" type="file" accept="image/*"><span class="field-hint">Или укажите прямую ссылку на фото ниже. До 8 МБ.</span></label>
+        <label class="full">Ссылка на фото<input name="imageUrl" type="url" placeholder="https://..."></label>
+        <label class="check-label"><input name="showInCarousel" type="checkbox" checked> Показывать в карусели на главной</label>
+      </div>
+      <div class="form-actions"><button class="cta" type="submit">Сохранить товар</button><button type="button" id="cancelProduct" class="secondary-btn">Отмена</button></div>
+      <p id="productFormMessage" class="form-message"></p>
+    </form>
+    <div class="admin-product-list">${products.map(p=>`<div class="admin-product-row"><div class="admin-product-thumb">${p.imageUrl?`<img src="${safe(p.imageUrl)}" alt="">`:"▱"}</div><div class="admin-product-meta"><b>${safe(p.name)}</b><span>${money(p.price)} · ${p.showInCarousel===false?"Не в карусели":"В карусели"}</span></div><button class="secondary-btn" data-edit-product="${safe(p.id)}">Изменить</button><button class="danger-btn" data-delete-product="${safe(p.id)}">Удалить</button></div>`).join("")||"<p>Товаров пока нет.</p>"}</div>`;
+  $("#newProduct").onclick=()=>showProductForm();
+  $("#cancelProduct").onclick=()=>{$("#productForm").classList.add("hidden");editingProductId=null;};
+  $("#productForm").onsubmit=saveProduct;
+}
+function showProductForm(id=null){
+  editingProductId=id;
+  const form=$("#productForm"),p=products.find(x=>x.id===id);
+  form.reset();form.classList.remove("hidden");
+  $("#productFormTitle").textContent=p?"Редактировать товар":"Новый товар";
+  if(p){for(const key of ["name","category","price","productUrl","description","imageUrl"])form.elements[key].value=p[key]??(key==="price"?0:"");form.elements.showInCarousel.checked=p.showInCarousel!==false;}
+  else form.elements.showInCarousel.checked=true;
+  form.scrollIntoView({behavior:"smooth",block:"start"});
+}
+async function saveProduct(e){
+  e.preventDefault();if(!F.ready)return toast("Firebase не настроен. Заполните js/firebase.js");
+  const form=e.currentTarget,fd=new FormData(form),file=fd.get("imageFile");
+  const message=$("#productFormMessage");message.textContent="Сохраняем...";
+  try{
+    const data={name:String(fd.get("name")).trim(),category:fd.get("category")==="weld"?"weld":"cart",description:String(fd.get("description")||"").trim(),price:Math.max(0,Number(fd.get("price"))||0),productUrl:String(fd.get("productUrl")||"").trim(),imageUrl:String(fd.get("imageUrl")||"").trim(),showInCarousel:fd.get("showInCarousel")==="on",updatedAt:F.serverTimestamp()};
+    if(file&&file.size){
+      if(file.size>8*1024*1024)throw new Error("Фото должно быть не больше 8 МБ");
+      if(!file.type.startsWith("image/"))throw new Error("Можно загружать только изображения");
+      const path=`product-images/${user.uid}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,"_")}`;
+      const uploaded=await F.uploadBytes(F.storageRef(F.storage,path),file);
+      data.imageUrl=await F.getDownloadURL(uploaded.ref);data.imageStoragePath=path;
+    }
+    if(editingProductId){await F.updateDoc(F.doc(F.db,"products",editingProductId),data);}
+    else{data.createdAt=F.serverTimestamp();await F.addDoc(F.collection(F.db,"products"),data);}
+    await loadProducts();message.textContent="Товар сохранён";await renderProductAdmin();toast("Товар сохранён");
+  }catch(err){message.textContent="Ошибка: "+err.message;}
+}
+async function deleteProduct(id){
+  if(!confirm("Удалить этот товар?"))return;
+  try{
+    const p=products.find(x=>x.id===id);
+    await F.deleteDoc(F.doc(F.db,"products",id));
+    if(p?.imageStoragePath&&F.storage)try{await F.deleteObject(F.storageRef(F.storage,p.imageStoragePath));}catch(e){console.warn("Не удалось удалить файл фото",e);}
+    products=products.filter(x=>x.id!==id);draw();renderProductAdmin();toast("Товар удалён");
+  }catch(e){toast("Не удалось удалить товар: "+e.message);}
+}
+document.addEventListener("click",async e=>{
+  const add=e.target.closest("[data-add]");
+  if(add){const p=products.find(x=>x.id===add.dataset.add);if(!p)return;if(!Number(p.price)){ $("#custom").scrollIntoView({behavior:"smooth"});return;}const line=cart.find(x=>x.id===p.id);line?line.qty++:cart.push({id:p.id,name:p.name,price:Number(p.price),qty:1});drawCart();}
+  const del=e.target.closest("[data-del]");if(del){cart=cart.filter(x=>x.id!==del.dataset.del);drawCart();}
+  const t=e.target.closest("[data-tab]");if(t){tab=t.dataset.tab;renderAdmin();}
+  const edit=e.target.closest("[data-edit-product]");if(edit)showProductForm(edit.dataset.editProduct);
+  const remove=e.target.closest("[data-delete-product]");if(remove)deleteProduct(remove.dataset.deleteProduct);
+  const dot=e.target.closest("[data-dot]");if(dot){carouselIndex=Number(dot.dataset.dot);drawCarousel();startCarousel();}
+});
+document.addEventListener("change",async e=>{
+  if(e.target.matches("[data-role]"))try{await F.httpsCallable(F.functions,"setUserRole")({uid:e.target.dataset.role,role:e.target.value});toast("Роль изменена");await renderAdmin();}catch(err){toast("Не удалось изменить роль. Проверьте Cloud Function и права администратора.");}
+});
+document.querySelectorAll("[data-filter]").forEach(b=>b.onclick=()=>draw(b.dataset.filter));
+$("#carouselPrev").onclick=()=>{moveCarousel(-1);startCarousel();};
+$("#carouselNext").onclick=()=>{moveCarousel(1);startCarousel();};
+$("#productCarousel").addEventListener("mouseenter",stopCarousel);
+$("#productCarousel").addEventListener("mouseleave",startCarousel);
+$("#cartBtn").onclick=()=>{$("#cart").classList.remove("hidden");drawCart();};
+$("#closeCart").onclick=()=>$("#cart").classList.add("hidden");
+$("#closeAdmin").onclick=()=>$("#admin").classList.add("hidden");
+$("#checkout").onclick=order;$("#request").onsubmit=request;$("#login").onclick=signIn;
+draw();drawCart();startCarousel();loadProducts();
+if(F.ready)F.onAuthStateChanged(F.auth,async u=>{user=u;if(u){await ensureUser(u);}else{profile=null;}authUi();});
