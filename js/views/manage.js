@@ -3,7 +3,7 @@ import { Data } from '../data.js';
 import * as D from '../domain.js';
 import * as Svc from '../services.js';
 import { S, Actions, Views, App, ROLES, ROLE_OPTIONS } from '../state.js';
-import { $, esc, num, norm, money, opts, fmtDateTime, fmtDate, ymd, toCSV, download, exportXLSX, hasXLSX, readTable } from '../utils.js';
+import { $, esc, num, norm, money, opts, fmtDateTime, fmtDate, ymd, toCSV, download, exportXLSX, hasXLSX, readTable, normalizeImageUrl, probeImage, imageUrlHint } from '../utils.js';
 import { icon } from '../icons.js';
 import { toast, paginate, pagerHTML, segBtns, emptyState, confirmDialog, formDialog, thumb } from '../ui.js';
 import { APP } from '../config.js';
@@ -33,7 +33,7 @@ function rowToProduct(row) {
     type: /услуг|service/i.test(String(p.type || '')) ? 'service' : 'product',
     category: String(p.category ?? '').trim(), description: String(p.description ?? '').trim(), unit: String(p.unit ?? '').trim(),
     retailPrice: num(p.retailPrice), storePrice: num(p.storePrice), dealerPrice: num(p.dealerPrice), costPrice: num(p.costPrice),
-    stock: num(p.stock), isNew: yes(p.isNew), featured: yes(p.featured), imageUrl: String(p.imageUrl ?? '').trim(),
+    stock: num(p.stock), isNew: yes(p.isNew), featured: yes(p.featured), imageUrl: normalizeImageUrl(p.imageUrl),
   };
 }
 const productRow = (p) => ({
@@ -114,7 +114,7 @@ function productsBody() {
         <label class="check"><input type="checkbox" name="isNew">Новинка</label>
         <label class="check"><input type="checkbox" name="featured">На главной</label></div>
       <div class="img-row"><div class="img-preview" id="pfPreview"><span class="ph">${icon('image')}</span></div>
-        <div class="stack"><label class="field"><span>Фото по ссылке</span><input type="url" name="imageUrl" placeholder="https://..."></label>
+        <div class="stack"><label class="field"><span>Фото по ссылке</span><input type="text" name="imageUrl" inputmode="url" placeholder="https://.../photo.jpg" autocomplete="off"></label><small class="note" id="pfImgHint">Прямая ссылка на картинку или ссылка Google Диска (доступ «Все, у кого есть ссылка»).</small>
           <div class="btn-row"><label class="btn btn--ghost btn--sm file-btn">${icon('upload')}Загрузить файл<input type="file" id="pfImageFile" accept="image/*"></label>
           <button type="button" class="btn btn--ghost btn--sm" data-action="prod-clear-image">${icon('x')}Убрать фото</button></div></div></div>
       <label class="field"><span>Описание</span><textarea name="description" rows="3"></textarea></label>
@@ -233,7 +233,23 @@ Views.manage = {
 };
 
 /* ------------------------------ Форма товара --------------------------- */
-function setPreview(src) { const el = $('#pfPreview'); if (el) el.innerHTML = src ? `<img src="${esc(src)}" alt="">` : `<span class="ph">${icon('image')}</span>`; }
+let previewSeq = 0;
+function setPreview(src, raw) {
+  const el = $('#pfPreview');
+  const hint = $('#pfImgHint');
+  if (!el) return;
+  const seq = ++previewSeq;
+  el.classList.remove('is-bad');
+  if (!src) { el.innerHTML = `<span class="ph">${icon('image')}</span>`; if (hint) { hint.textContent = 'Прямая ссылка на картинку или ссылка Google Диска (доступ «Все, у кого есть ссылка»).'; hint.classList.remove('is-debt'); } return; }
+  el.innerHTML = `<img src="${esc(src)}" alt="" referrerpolicy="no-referrer">`;
+  if (src.startsWith('data:') || src.startsWith('blob:')) return;
+  if (hint) { hint.textContent = 'Проверяю картинку...'; hint.classList.remove('is-debt'); }
+  probeImage(src).then((ok) => {
+    if (seq !== previewSeq || !hint) return;
+    if (ok) { hint.textContent = src !== String(raw || '').trim() ? 'Картинка найдена. Ссылка исправлена автоматически.' : 'Картинка найдена.'; hint.classList.remove('is-debt'); }
+    else { el.classList.add('is-bad'); el.innerHTML = `<span class="ph">${icon('alert')}</span>`; hint.textContent = 'Картинка по ссылке не открывается. ' + imageUrlHint(raw || src); hint.classList.add('is-debt'); }
+  });
+}
 export function syncProductType() { const f = $('#productForm'); if (f) $('#pfStockRow').hidden = f.type.value === 'service'; }
 export function fillProductForm(p) {
   const f = $('#productForm');
@@ -250,11 +266,11 @@ export function fillProductForm(p) {
     f.isNew.checked = Boolean(p.isNew); f.featured.checked = Boolean(p.featured);
     f.imageUrl.value = String(p.imageUrl || '').startsWith('data:') ? '' : p.imageUrl || '';
   }
-  setPreview(p && p.imageUrl);
+  setPreview(p && p.imageUrl, p && p.imageUrl);
   syncProductType();
 }
 export function onProductInput(t) {
-  if (t.name === 'imageUrl') setPreview(t.value.trim() || $('#productForm').dataset.image);
+  if (t.name === 'imageUrl') { clearTimeout(onProductInput.t); onProductInput.t = setTimeout(() => setPreview(normalizeImageUrl(t.value) || $('#productForm').dataset.image, t.value), 400); }
   if (t.name === 'type') syncProductType();
 }
 export function onProductImage(file) {
@@ -266,7 +282,12 @@ export function onProductImage(file) {
 export async function submitProduct(form) {
   const v = (k) => String(form[k].value || '').trim();
   const existing = S.mprod.editId ? D.product(S.mprod.editId) : null;
-  let imageUrl = v('imageUrl') || form.dataset.image || '';
+  const typed = v('imageUrl');
+  let imageUrl = typed ? normalizeImageUrl(typed) : form.dataset.image || '';
+  if (typed && !S.mprod.imageFile && !(await probeImage(imageUrl))) {
+    const go = await confirmDialog('Картинка по ссылке не открывается', imageUrlHint(typed) + '\n\nСохранить товар с этой ссылкой все равно?', 'Сохранить все равно');
+    if (!go) return;
+  }
   if (S.mprod.imageFile) { toast('Загрузка фото...', 'info', 2000); imageUrl = await Data.uploadImage(S.mprod.imageFile); }
   await Svc.saveProduct({
     type: form.type.value, sku: v('sku'), unit: v('unit'), name: v('name'), category: v('category'), description: v('description'),

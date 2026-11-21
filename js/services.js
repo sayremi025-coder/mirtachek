@@ -6,7 +6,7 @@
 import { Data } from './data.js';
 import * as D from './domain.js';
 import { DOC_KINDS, ORDER_KINDS, MODE_META } from './state.js';
-import { newId, docNumber, num, round2, sum, norm } from './utils.js';
+import { newId, docNumber, num, round2, sum, norm, normalizeImageUrl } from './utils.js';
 
 const now = () => Date.now();
 const COMPANY = D.COMPANY;
@@ -217,7 +217,7 @@ export function normalizeProduct(src, existing) {
     type, sku: String(src.sku || '').trim(), name: String(src.name || '').trim(), category: String(src.category || '').trim(),
     description: String(src.description || '').trim(), unit: String(src.unit || (type === 'service' ? 'услуга' : 'шт')).trim(),
     retailPrice: retail, stock: type === 'service' ? 0 : Math.round(num(src.stock)),
-    isNew: Boolean(src.isNew), featured: Boolean(src.featured), imageUrl: String(src.imageUrl || '').trim(),
+    isNew: Boolean(src.isNew), featured: Boolean(src.featured), imageUrl: normalizeImageUrl(src.imageUrl),
     createdAt: existing ? existing.createdAt || now() : num(src.createdAt) || now(), updatedAt: now(),
   });
   ['storePrice', 'dealerPrice', 'costPrice'].forEach((k) => delete p[k]);

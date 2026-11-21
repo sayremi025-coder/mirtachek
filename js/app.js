@@ -248,6 +248,16 @@ async function boot() {
   document.addEventListener('submit', onSubmit);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
   window.addEventListener('afterprint', () => { $('#print-area').innerHTML = ''; });
+  // Битая ссылка на фото — показываем аккуратную заглушку вместо значка ошибки
+  document.addEventListener('error', (e) => {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement) || !img.dataset.fallback) return;
+    const ph = document.createElement('span');
+    ph.className = 'ph';
+    ph.title = 'Фото не загрузилось: проверьте ссылку в карточке товара';
+    ph.innerHTML = icon(img.dataset.fallback);
+    img.replaceWith(ph);
+  }, true);
   $('#modalClose').innerHTML = icon('x');
   const hash = location.hash.replace('#', '');
   if (TABS[hash]) S.view = hash;

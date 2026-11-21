@@ -683,3 +683,7 @@ rect.is-neg { fill: var(--danger); }
 @media (max-width: 420px) {
   .user-chip span { display: none; }
 }
+
+.img-preview.is-bad { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+.img-preview.is-bad .ph { background: none; color: var(--danger); }
+#pfImgHint.is-debt { color: var(--danger); font-weight: 400; }

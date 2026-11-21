@@ -1,5 +1,5 @@
 /* Мир Тачек — UI-компоненты: тосты, модалки, диалоги, пагинация, диаграммы */
-import { $, $$, esc, num, getPath, moneyShort, money } from './utils.js';
+import { $, $$, esc, num, getPath, moneyShort, money, normalizeImageUrl } from './utils.js';
 import { icon } from './icons.js';
 import { APP } from './config.js';
 
@@ -99,7 +99,7 @@ export function syncSegs(root, state) {
   });
 }
 export const emptyState = (ic, title, text, action = '') => `<div class="empty">${icon(ic)}<b>${esc(title)}</b><span>${esc(text)}</span>${action}</div>`;
-export const thumb = (p) => (p && p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="" loading="lazy">` : `<span class="ph">${icon(p && p.type === 'service' ? 'wrench' : 'package')}</span>`);
+export const thumb = (p) => (p && p.imageUrl ? `<img src="${esc(normalizeImageUrl(p.imageUrl))}" alt="" loading="lazy" referrerpolicy="no-referrer" data-fallback="${p.type === 'service' ? 'wrench' : 'package'}">` : `<span class="ph">${icon(p && p.type === 'service' ? 'wrench' : 'package')}</span>`);
 export const stepper = (id, value) => `<div class="stepper">
   <button type="button" data-action="step" data-target="#${id}" data-delta="-1" aria-label="Меньше">${icon('minus')}</button>
   <input id="${id}" type="number" min="1" value="${value}" aria-label="Количество">

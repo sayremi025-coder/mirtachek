@@ -181,3 +181,57 @@ export function withTimeout(promise, ms, onTimeout) {
     new Promise((resolve, reject) => { t = setTimeout(() => (onTimeout ? resolve(onTimeout()) : reject(new Error('Превышено время ожидания'))), ms); }),
   ]).finally(() => clearTimeout(t));
 }
+
+/* --------------------------- Ссылки на фото --------------------------- */
+/**
+ * Превращает «ссылку на страницу» в прямую ссылку на картинку, где это возможно:
+ * Google Диск, Google/Яндекс Картинки, Dropbox, GitHub. Добавляет https://.
+ */
+export function normalizeImageUrl(raw) {
+  let s = String(raw || '').trim();
+  if (!s || s.startsWith('data:') || s.startsWith('blob:')) return s;
+  if (s.startsWith('//')) s = 'https:' + s;
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+  let u;
+  try { u = new URL(s); } catch (e) { return s; }
+  const host = u.hostname.replace(/^www\./, '');
+  // Google Картинки: .../imgres?imgurl=ПРЯМАЯ_ССЫЛКА
+  if (/(^|\.)google\.[a-z.]+$/.test(host) && u.searchParams.get('imgurl')) return normalizeImageUrl(u.searchParams.get('imgurl'));
+  // Яндекс Картинки: ...?img_url=ПРЯМАЯ_ССЫЛКА
+  if (/(^|\.)yandex\.[a-z.]+$/.test(host) && u.searchParams.get('img_url')) return normalizeImageUrl(u.searchParams.get('img_url'));
+  // Google Диск: /file/d/ID/view, /open?id=ID, /uc?id=ID
+  if (host === 'drive.google.com' || host === 'docs.google.com') {
+    const m = u.pathname.match(/\/d\/([\w-]{10,})/);
+    const id = m ? m[1] : u.searchParams.get('id');
+    if (id) return `https://drive.google.com/thumbnail?id=${id}&sz=w1200`;
+  }
+  // Dropbox: ?dl=0 → ?raw=1
+  if (host.endsWith('dropbox.com')) { u.searchParams.delete('dl'); u.searchParams.set('raw', '1'); return u.toString(); }
+  // GitHub: /user/repo/blob/branch/path → raw
+  if (host === 'github.com' && u.pathname.includes('/blob/')) return `https://raw.githubusercontent.com${u.pathname.replace('/blob/', '/')}`;
+  // На https-сайте http-картинки блокируются браузером — пробуем https
+  if (u.protocol === 'http:' && typeof location !== 'undefined' && location.protocol === 'https:') u.protocol = 'https:';
+  return u.toString();
+}
+
+/** Проверяет, что по ссылке действительно открывается изображение */
+export function probeImage(src, ms = 10000) {
+  return new Promise((resolve) => {
+    if (!src) { resolve(false); return; }
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    const t = setTimeout(() => resolve(false), ms);
+    img.onload = () => { clearTimeout(t); resolve(img.naturalWidth > 0); };
+    img.onerror = () => { clearTimeout(t); resolve(false); };
+    img.src = src;
+  });
+}
+
+/** Подсказка, почему ссылка может не открываться */
+export function imageUrlHint(raw) {
+  const s = String(raw || '').toLowerCase();
+  if (/disk\.yandex|yadi\.sk/.test(s)) return 'Ссылки Яндекс Диска открывают страницу, а не картинку. Загрузите фото файлом или откройте картинку и скопируйте адрес изображения.';
+  if (/instagram\.com|wa\.me|whatsapp|t\.me|vk\.com|facebook\.com/.test(s)) return 'Это ссылка на пост или чат, а не на картинку. Сохраните фото и загрузите файлом.';
+  if (/photos\.app\.goo\.gl|photos\.google\.com/.test(s)) return 'Google Фото не отдает картинки по ссылке. Загрузите фото файлом.';
+  return 'Ссылка должна вести прямо на изображение (обычно заканчивается на .jpg, .png или .webp). На картинке в браузере: правая кнопка → «Копировать адрес изображения».';
+}

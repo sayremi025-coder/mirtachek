@@ -13,12 +13,12 @@
 export const USE_DEMO = false; // LIVE по умолчанию
 
 export const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyBJTbCyZHbrijeglKQ9566136AtMlgKrtQ",
-  authDomain: "oybek-e501a.firebaseapp.com",
-  projectId: "oybek-e501a",
-  storageBucket: "oybek-e501a.firebasestorage.app",
-  messagingSenderId: "1042259919778",
-  appId: "1:1042259919778:web:93a4721870aff250d928fb"
+  apiKey: '',
+  authDomain: '',
+  projectId: '',
+  storageBucket: '',
+  messagingSenderId: '',
+  appId: '',
 };
 
 // Необязательно. Email владельца (нижний регистр); если заполнен — должен совпадать со списком в firestore.rules
