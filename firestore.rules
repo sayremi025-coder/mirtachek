@@ -2,15 +2,29 @@ rules_version = '2';
 service cloud.firestore {
  match /databases/{database}/documents {
   function signed(){return request.auth != null;}
-  function admin(){return signed() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.blocked != true;}
-  match /users/{uid}{
-   allow create: if signed() && request.auth.uid==uid && request.resource.data.role=='buyer' && request.resource.data.blocked==false;
+  function me(){return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;}
+  function admin(){return signed() && me().role == 'admin' && me().blocked != true;}
+  function active(){return signed() && me().blocked != true;}
+  match /users/{uid} {
+   allow create: if signed() && request.auth.uid==uid && request.resource.data.role=='customer' && request.resource.data.blocked==false;
    allow read: if signed() && (request.auth.uid==uid || admin());
-   allow update: if admin() || (signed() && request.auth.uid==uid && request.resource.data.role==resource.data.role && request.resource.data.blocked==resource.data.blocked && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','phone','photoURL','lastLoginAt']));
+   allow update: if admin() || (active() && request.auth.uid==uid && request.resource.data.role==resource.data.role && request.resource.data.blocked==resource.data.blocked && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','phone','photoURL','lastLoginAt','whatsappPhone']));
    allow delete: if admin();
   }
-  match /orders/{id}{allow create: if signed() && request.resource.data.uid==request.auth.uid;allow read: if admin() || (signed() && resource.data.uid==request.auth.uid);allow update,delete: if admin();}
-  match /requests/{id}{allow create: if signed() && request.resource.data.uid==request.auth.uid;allow read,update,delete: if admin();}
-  match /products/{id}{allow read: if true;allow write: if admin();}
+  match /products/{id} {allow read: if false;allow write: if admin();}
+  // Documents are written only by trusted Cloud Functions; clients can never alter stock or totals.
+  match /documents/{id} {
+   allow create,delete: if false;
+   allow read: if admin() || (active() && (resource.data.uid==request.auth.uid || resource.data.dealerUid==request.auth.uid || resource.data.storeUid==request.auth.uid));
+   allow update: if false;
+  }
+  match /contacts/{id} {allow create: if active() && request.resource.data.uid==request.auth.uid;allow read,update,delete: if admin() || (active() && resource.data.uid==request.auth.uid);}
+  match /views/{id} {allow create: if true;allow read: if admin();allow update,delete: if admin();}
+  match /requests/{id} {allow create: if true;allow read,update,delete: if admin();}
+  match /roleReports/{id} {allow create: if active() && request.resource.data.dealerUid==request.auth.uid;allow read: if admin() || (active() && resource.data.dealerUid==request.auth.uid);allow update,delete: if admin();}
+  match /inventoryMovements/{id} {allow read: if admin();allow write: if false;}
+  match /roleHistory/{id} {allow read: if admin();allow write: if false;}
+  match /appSettings/{id} {allow read: if id=='public';allow write: if admin();}
+  match /{document=**} {allow read,write: if false;}
  }
 }
