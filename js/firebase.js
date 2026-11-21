@@ -3,13 +3,13 @@
   "use strict";
   window.USE_DEMO = false;
   window.MIR_FIREBASE_CONFIG = {
-    apiKey: "YOUR_FIREBASE_API_KEY",
-    authDomain: "YOUR_PROJECT.firebaseapp.com",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_PROJECT.appspot.com",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_FIREBASE_APP_ID"
-  };
+    apiKey: "AIzaSyBJTbCyZHbrijeglKQ9566136AtMlgKrtQ",
+  authDomain: "oybek-e501a.firebaseapp.com",
+  projectId: "oybek-e501a",
+  storageBucket: "oybek-e501a.firebasestorage.app",
+  messagingSenderId: "1042259919778",
+  appId: "1:1042259919778:web:93a4721870aff250d928fb"
+};
   const c=window.MIR_FIREBASE_CONFIG;
   window.MIR_FIREBASE_READY=false;
   window.MIR_FIREBASE_ERROR="";
