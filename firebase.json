@@ -1,1 +1,9 @@
-{"firestore":{"rules":"firestore.rules"},"storage":{"rules":"storage.rules"},"functions":{"source":"functions"},"hosting":{"public":".","ignore":["firebase.json","**/.*","**/node_modules/**","functions/**"]}}
+{
+  "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
+  "storage": { "rules": "storage.rules" },
+  "hosting": {
+    "public": ".",
+    "ignore": ["firebase.json", "firestore.rules", "firestore.indexes.json", "storage.rules", "README.md", "templates/**", "**/.*", "**/node_modules/**"],
+    "headers": [{ "source": "**/*.@(js|css)", "headers": [{ "key": "Cache-Control", "value": "max-age=300" }] }]
+  }
+}

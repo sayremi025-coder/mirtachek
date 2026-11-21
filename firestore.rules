@@ -1,30 +1,145 @@
 rules_version = '2';
+// Мир Тачек — правила доступа Firestore.
+// ВАЖНО: впишите email владельца в bootstrapAdmin() — тот же, что в js/config.js → ADMIN_EMAILS.
 service cloud.firestore {
- match /databases/{database}/documents {
-  function signed(){return request.auth != null;}
-  function me(){return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;}
-  function admin(){return signed() && me().role == 'admin' && me().blocked != true;}
-  function active(){return signed() && me().blocked != true;}
-  match /users/{uid} {
-   allow create: if signed() && request.auth.uid==uid && request.resource.data.role=='customer' && request.resource.data.blocked==false;
-   allow read: if signed() && (request.auth.uid==uid || admin());
-   allow update: if admin() || (active() && request.auth.uid==uid && request.resource.data.role==resource.data.role && request.resource.data.blocked==resource.data.blocked && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','phone','photoURL','lastLoginAt','whatsappPhone']));
-   allow delete: if admin();
+  match /databases/{database}/documents {
+
+    function signed() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function bootstrapAdmin() {
+      return signed() && request.auth.token.email != null && request.auth.token.email_verified == true
+        && request.auth.token.email.lower() in ['owner@example.com'];
+    }
+    function userDoc(u) { return get(/databases/$(database)/documents/users/$(u)); }
+    function hasProfile() { return signed() && exists(/databases/$(database)/documents/users/$(uid())); }
+    function active() { return hasProfile() && userDoc(uid()).data.blocked != true; }
+    function myRole() { return active() ? userDoc(uid()).data.role : 'guest'; }
+    function isAdmin() { return bootstrapAdmin() || myRole() == 'admin'; }
+    function isRole(r) { return myRole() == r; }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function onlyKeys(keys) { return changed().hasOnly(keys); }
+    function inParticipants() { return signed() && uid() in resource.data.participants; }
+
+    // Публичные настройки компании (название, WhatsApp)
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Профили. Первый вход — только роль customer. Роль и блокировку меняет администратор.
+    match /users/{userId} {
+      allow read: if signed() && (userId == uid() || isAdmin() || (isRole('dealer') && resource.data.role == 'store'));
+      allow create: if signed() && userId == uid()
+        && request.resource.data.blocked == false
+        && (request.resource.data.role == 'customer' || (bootstrapAdmin() && request.resource.data.role == 'admin'));
+      allow update: if isAdmin()
+        || (signed() && userId == uid() && resource.data.blocked != true && onlyKeys(['name', 'phone', 'lastLoginAt'])
+            && !(resource.data.role == 'store' && 'name' in changed()));
+      allow delete: if isAdmin();
+    }
+
+    // Каталог: читают все, меняет только администратор (включая остатки)
+    match /products/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Скрытые цены: store — магазину/дилеру/админу, dealer — дилеру/админу, cost — только админу
+    match /priceLists/{level} {
+      allow read: if isAdmin()
+        || (level == 'store' && (isRole('store') || isRole('dealer')))
+        || (level == 'dealer' && isRole('dealer'));
+      allow write: if isAdmin();
+    }
+
+    // Заказы: видят заказчик, администратор и назначенный дилер
+    match /orders/{id} {
+      allow read: if isAdmin() || inParticipants();
+      allow create: if active()
+        && request.resource.data.uid == uid()
+        && request.resource.data.participants == [uid()]
+        && request.resource.data.status == 'new'
+        && ((request.resource.data.kind == 'retail')
+            || (request.resource.data.kind == 'store' && isRole('store'))
+            || (request.resource.data.kind == 'dealer' && isRole('dealer')));
+      allow update: if isAdmin()
+        || (active() && resource.data.uid == uid() && resource.data.status == 'new'
+            && request.resource.data.status == 'cancelled' && onlyKeys(['status', 'updatedAt']))
+        || (active() && resource.data.assignedDealerUid == uid() && isRole('dealer')
+            && request.resource.data.status == 'done' && onlyKeys(['status', 'resultDocId', 'updatedAt']));
+      allow delete: if isAdmin();
+    }
+
+    // Документы: продажи/выдачи создает админ, отгрузку в магазин — дилер от своего имени.
+    // Покупатель может только принять документ. Сумма и состав не меняются.
+    match /documents/{id} {
+      allow read: if isAdmin() || inParticipants();
+      allow create: if isAdmin()
+        || (isRole('dealer')
+            && request.resource.data.kind == 'shipment'
+            && request.resource.data.sellerUid == uid()
+            && request.resource.data.dealerUid == uid()
+            && request.resource.data.status == 'pending'
+            && uid() in request.resource.data.participants
+            && request.resource.data.participants.size() == 2
+            && userDoc(request.resource.data.buyerUid).data.role == 'store'
+            && request.resource.data.buyerUid in request.resource.data.participants);
+      allow update: if isAdmin()
+        || (active() && resource.data.buyerUid == uid() && resource.data.status == 'pending'
+            && request.resource.data.status == 'accepted'
+            && onlyKeys(['status', 'acceptedAt', 'acceptMode', 'updatedAt']));
+      allow delete: if isAdmin();
+    }
+
+    // Оплаты: участник фиксирует оплату (pending), подтверждает только вторая сторона.
+    match /payments/{id} {
+      allow read: if isAdmin() || inParticipants();
+      allow create: if isAdmin()
+        || (active()
+            && request.resource.data.createdBy == uid()
+            && request.resource.data.status == 'pending'
+            && uid() in request.resource.data.participants
+            && (request.resource.data.payerUid == uid() || request.resource.data.payeeUid == uid())
+            && request.resource.data.amount > 0
+            && existsAfter(/databases/$(database)/documents/documents/$(request.resource.data.docId)));
+      allow update: if isAdmin()
+        || (active() && inParticipants()
+            && resource.data.createdBy != uid()
+            && resource.data.status == 'pending'
+            && request.resource.data.status in ['confirmed', 'rejected']
+            && request.resource.data.confirmedBy == uid()
+            && onlyKeys(['status', 'confirmedBy', 'confirmedAt']));
+      allow delete: if isAdmin();
+    }
+
+    // Отчеты дилеров
+    match /dealerReports/{id} {
+      allow create: if isRole('dealer') && request.resource.data.dealerUid == uid();
+      allow read: if isAdmin() || (signed() && resource.data.dealerUid == uid());
+      allow update, delete: if isAdmin();
+    }
+
+    // Просмотры товаров (для CRM-сценария «смотрел 7 дней назад»)
+    match /views/{id} {
+      allow create: if signed() && request.resource.data.uid == uid();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // Заявки на консультацию: может оставить любой посетитель
+    match /requests/{id} {
+      allow create: if request.resource.data.keys().hasOnly(['name', 'phone', 'text', 'uid', 'createdAt', 'status'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 120
+        && request.resource.data.phone is string && request.resource.data.phone.size() <= 40
+        && request.resource.data.text is string && request.resource.data.text.size() <= 2000
+        && request.resource.data.status == 'new';
+      allow read, update, delete: if isAdmin();
+    }
+
+    // Только администратор
+    match /contacts/{id} { allow read, write: if isAdmin(); }
+    match /movements/{id} { allow read, write: if isAdmin(); }
+    match /audit/{id} { allow read, write: if isAdmin(); }
+
+    match /{document=**} { allow read, write: if false; }
   }
-  match /products/{id} {allow read: if false;allow write: if admin();}
-  // Documents are written only by trusted Cloud Functions; clients can never alter stock or totals.
-  match /documents/{id} {
-   allow create,delete: if false;
-   allow read: if admin() || (active() && (resource.data.uid==request.auth.uid || resource.data.dealerUid==request.auth.uid || resource.data.storeUid==request.auth.uid));
-   allow update: if false;
-  }
-  match /contacts/{id} {allow create: if active() && request.resource.data.uid==request.auth.uid;allow read,update,delete: if admin() || (active() && resource.data.uid==request.auth.uid);}
-  match /views/{id} {allow create: if true;allow read: if admin();allow update,delete: if admin();}
-  match /requests/{id} {allow create: if true;allow read,update,delete: if admin();}
-  match /roleReports/{id} {allow create: if active() && request.resource.data.dealerUid==request.auth.uid;allow read: if admin() || (active() && resource.data.dealerUid==request.auth.uid);allow update,delete: if admin();}
-  match /inventoryMovements/{id} {allow read: if admin();allow write: if false;}
-  match /roleHistory/{id} {allow read: if admin();allow write: if false;}
-  match /appSettings/{id} {allow read: if id=='public';allow write: if admin();}
-  match /{document=**} {allow read,write: if false;}
- }
 }

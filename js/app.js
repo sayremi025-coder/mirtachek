@@ -1,98 +1,263 @@
-import * as F from "./firebase.js";
-const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const PAGE_SIZE=8, CACHE_KEY="mir-tachek-cache-v2", CART_KEY="mir-tachek-cart-v2", FAV_KEY="mir-tachek-favorites-v2";
-const ROLE_NAMES={customer:"Покупатель",buyer:"Покупатель",store:"Магазин",dealer:"Дилер",admin:"Администратор"};
-const money=n=>new Intl.NumberFormat("ru-RU",{maximumFractionDigits:0}).format(Number(n)||0)+" ₸";
-const safe=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const uid=()=>crypto.randomUUID?crypto.randomUUID():"id-"+Date.now()+"-"+Math.random().toString(16).slice(2);
-const dateValue=v=>v?.toDate?v.toDate():v?.seconds?new Date(v.seconds*1000):v?new Date(v):null;
-const nowISO=()=>new Date().toISOString();
-const seedProducts=[
- {id:"legacy-cart-1",name:"Тачка хозяйственная",type:"product",category:"Тачки",description:"Для дома, двора и хозяйства.",retailPrice:28000,storePrice:25000,dealerPrice:23000,costPrice:17000,stock:0},
- {id:"legacy-cart-2",name:"Усиленная металлическая тачка",type:"product",category:"Тачки",description:"Прочная конструкция для регулярной работы.",retailPrice:42000,storePrice:38000,dealerPrice:35000,costPrice:26000,stock:0},
- {id:"legacy-weld-1",name:"Металлическая полка",type:"product",category:"Металлоизделия",description:"Для мастерской, гаража и дома.",retailPrice:18000,storePrice:16000,dealerPrice:15000,costPrice:10000,stock:0},
- {id:"seed-1",name:"Моторное масло 5W-30",type:"product",category:"Масла и жидкости",description:"Моторное масло для легковых автомобилей.",retailPrice:8500,storePrice:7600,dealerPrice:7000,costPrice:5200,stock:25,isNew:true},
- {id:"seed-2",name:"Фильтр масляный",type:"product",category:"Фильтры",description:"Масляный фильтр для планового ТО.",retailPrice:3200,storePrice:2700,dealerPrice:2400,costPrice:1600,stock:40},
- {id:"seed-3",name:"Диагностика автомобиля",type:"service",category:"СТО",description:"Компьютерная диагностика основных систем автомобиля.",retailPrice:7000,storePrice:6000,dealerPrice:5500,costPrice:1800,stock:0}
-];
-const emptyCache={products:[],documents:[],contacts:[],users:[],views:[],requests:[],roleReports:[],appSettings:[]};
-const QUEUE_KEY="mir-tachek-write-queue-v1", SETTINGS_KEY="mir-tachek-public-settings-v1";
-class DataLayer{
- constructor(){this.cache=this.readCache();this.online=F.firebaseConfigured;this.queue=this.readQueue();if(this.online)window.addEventListener("online",()=>this.flush());}
- readQueue(){try{return JSON.parse(localStorage.getItem(QUEUE_KEY)||"[]")}catch{return []}}
- writeQueue(){localStorage.setItem(QUEUE_KEY,JSON.stringify(this.queue));}
- async flush(){if(!this.online||!navigator.onLine||F.USE_DEMO)return;for(const op of [...this.queue]){try{const ref=F.doc(F.db,op.name,op.id);if(op.kind==="delete")await F.deleteDoc(ref);else if(op.kind==="update")await F.setDoc(ref,op.data,{merge:true});else await F.setDoc(ref,op.data);this.queue=this.queue.filter(x=>x.key!==op.key);this.writeQueue();}catch(e){console.warn("Очередь синхронизации приостановлена",e);break;}}}
- readCache(){try{return {...emptyCache,...JSON.parse(localStorage.getItem(CACHE_KEY)||"{}")}}catch{return {...emptyCache}}}
- writeCache(){localStorage.setItem(CACHE_KEY,JSON.stringify(this.cache));}
- list(name){return [...(this.cache[name]||[])];}
- async load(name){if(!this.online||F.USE_DEMO)return this.list(name);try{let rows;if(name==="products"){const result=await F.httpsCallable(F.functions,"getCatalog")({});rows=result.data.items||[];}else{const snap=await F.getDocs(F.query(F.collection(F.db,name),F.limit(1000)));rows=snap.docs.map(d=>({id:d.id,...d.data()}));}rows.sort((a,b)=>(dateValue(b.createdAt)?.getTime()||0)-(dateValue(a.createdAt)?.getTime()||0));this.cache[name]=rows;this.writeCache();return rows;}catch(e){console.warn("Firebase read; using local mirror",name,e);return this.list(name);}}
- async save(name,data,id=null){const updating=!!id,row={...data,updatedAt:nowISO()};if(!id)id=uid();row.id=id;const i=this.cache[name].findIndex(x=>x.id===id);if(i>=0)this.cache[name][i]={...this.cache[name][i],...row};else this.cache[name].unshift(row);this.writeCache();if(this.online&&!F.USE_DEMO){const clean={...row};delete clean.id;try{await F.setDoc(F.doc(F.db,name,id),clean,{merge:updating});this.queue=this.queue.filter(x=>!(x.name===name&&x.id===id));this.writeQueue();}catch(e){this.queue=this.queue.filter(x=>!(x.name===name&&x.id===id));this.queue.push({key:uid(),kind:updating?"update":"set",name,id,data:clean});this.writeQueue();notice("Нет связи с сервером. Изменение сохранено на устройстве и будет отправлено при восстановлении связи.");}}return {id,...row};}
- async remove(name,id){this.cache[name]=this.cache[name].filter(x=>x.id!==id);this.writeCache();if(this.online&&!F.USE_DEMO){try{await F.deleteDoc(F.doc(F.db,name,id));}catch(e){this.queue.push({key:uid(),kind:"delete",name,id});this.writeQueue();notice("Удаление поставлено в очередь синхронизации.");}}}
- async upload(file,folder="uploads"){if(!file)return "";if(file.size>8*1024*1024)throw new Error("Максимальный размер файла — 8 МБ");if(!this.online||!F.storage)throw new Error("Для загрузки файла настройте Firebase Storage или используйте URL фото");const path=`${folder}/${Date.now()}-${file.name.replace(/[^a-z0-9._-]/gi,"_")}`;const r=await F.uploadBytes(F.storageRef(F.storage,path),file);return await F.getDownloadURL(r.ref);}
+/* =========================================================================
+   Мир Тачек — точка входа: роутинг, шапка, вход, события, запуск
+   ========================================================================= */
+import { Data } from './data.js';
+import * as D from './domain.js';
+import { S, Actions, Views, App, ROLES, TABS, persistCheckout } from './state.js';
+import { $, $$, esc, num, setPath, debounce, opts } from './utils.js';
+import { icon } from './icons.js';
+import { toast, openModal, closeModal, syncSegs, formDialog } from './ui.js';
+import { APP } from './config.js';
+
+import './views/catalog.js';
+import { submitRequest } from './views/catalog.js';
+import { syncCheckout, setCartQty } from './views/cart.js';
+import './views/orders.js';
+import './views/docs.js';
+import './views/reports.js';
+import { updateWa, waTextEdited, setStage } from './views/crm.js';
+import { submitProduct, onProductInput, onProductImage, importFile, changeUserRole, submitStock, submitSettings } from './views/manage.js';
+
+/* ------------------------------- Рендер ------------------------------- */
+const built = {};
+let builtFor = '';
+
+function renderView(name = S.view) {
+  const el = $('#view-' + name);
+  const v = Views[name];
+  if (!el || !v) return;
+  if (!built[name]) { el.innerHTML = v.shell(); built[name] = true; }
+  v.body();
+  syncSegs(el, S);
 }
-const DB=new DataLayer();
-let user=null,profile=null,role="customer",products=[],documents=[],contacts=[],users=[],views=[],carouselIndex=0,carouselTimer=null,favorites=new Set(JSON.parse(localStorage.getItem(FAV_KEY)||"[]")),cart=JSON.parse(localStorage.getItem(CART_KEY)||"[]"),activePage={catalog:1,documents:1,crm:1,reports:1,admin:1},adminTab="products",reportRows=[],favoritesOnly=false;
-function notice(msg){const el=$("#notice");if(el)el.textContent=msg;else alert(msg);}
-function isAdmin(){return role==="admin";}
-function priceFor(p){return Number(role==="dealer"?p.dealerPrice:role==="store"?p.storePrice:p.retailPrice??p.price)||0;}
-function canSeeAdmin(){return isAdmin();}
-let appSettings={businessWhatsapp:"",businessName:"МИР ТАЧЕК"};
-function businessPhone(){return appSettings.businessWhatsapp||profile?.whatsappPhone||"";}
-async function loadSettings(){try{if(F.firebaseConfigured&&!F.USE_DEMO){const snap=await F.getDoc(F.doc(F.db,"appSettings","public"));if(snap.exists())appSettings={...appSettings,...snap.data()};}else appSettings={...appSettings,...JSON.parse(localStorage.getItem(SETTINGS_KEY)||"{}")};}catch(e){console.warn("Не удалось загрузить настройки",e);}}
-async function saveSettings(data){appSettings={...appSettings,...data};localStorage.setItem(SETTINGS_KEY,JSON.stringify(appSettings));if(F.firebaseConfigured&&!F.USE_DEMO)await F.setDoc(F.doc(F.db,"appSettings","public"),appSettings,{merge:true});notice("Настройки компании сохранены.");}
-function setRole(r){role=r||"customer";$("#dealerReport")?.classList.toggle("hidden",role!=="dealer");$("#roleLabel").textContent=ROLE_NAMES[role]||"Покупатель";$("#statRole").textContent=ROLE_NAMES[role]||role;$$('.admin-only').forEach(x=>x.classList.toggle("hidden",!isAdmin()));renderCatalog();renderDocuments();renderCRM();renderAdmin();}
-function pager(target,total,page,callback){const pages=Math.max(1,Math.ceil(total/PAGE_SIZE));page=Math.min(page,pages);const host=$(target);host.innerHTML=pages<=1?`<span class="muted">${total} записей</span>`:`<span>${total} записей</span><div><button data-page="${page-1}" ${page<=1?"disabled":""}>Назад</button><b>${page} / ${pages}</b><button data-page="${page+1}" ${page>=pages?"disabled":""}>Далее</button></div>`;host.onclick=e=>{const b=e.target.closest("[data-page]");if(!b)return;callback(Number(b.dataset.page));};}
-function paginate(rows,page){return rows.slice((page-1)*PAGE_SIZE,page*PAGE_SIZE);}
-function productCard(p){const price=priceFor(p);return `<article class="product-card"><button class="favorite-btn ${favorites.has(p.id)?"selected":""}" data-fav="${safe(p.id)}" aria-label="Избранное">${favorites.has(p.id)?"В избранном":"В избранное"}</button><button class="product-main" data-detail="${safe(p.id)}"><div class="product-image">${p.imageUrl?`<img src="${safe(p.imageUrl)}" alt="${safe(p.name)}">`:`<span class="image-placeholder">${p.type==="service"?"УСЛУГА":"МИР ТАЧЕК"}</span>`}${p.isNew?'<span class="new-label">НОВИНКА</span>':""}</div><div class="product-body"><small>${safe(p.category|| (p.type==="service"?"Услуги":"Автотовары"))}</small><h3>${safe(p.name)}</h3><p>${safe(p.description||"")}</p><b class="price">${money(price)}</b><span class="stock">${p.type==="service"?"Запись доступна":"Остаток: "+(Number(p.stock)||0)}</span></div></button><div class="product-foot"><button class="btn btn-primary" data-add="${safe(p.id)}">${p.type==="service"?"Записаться":"В корзину"}</button><button class="btn btn-quiet" data-wa-item="${safe(p.id)}">WhatsApp</button></div></article>`;}
-function filteredCatalog(){let rows=[...products],q=$("#catalogSearch").value.trim().toLowerCase(),type=$("#typeFilter").value,cat=$("#categoryFilter").value,sort=$("#sortFilter").value;if(q)rows=rows.filter(p=>[p.name,p.description,p.category].join(" ").toLowerCase().includes(q));if(type!=="all")rows=rows.filter(p=>p.type===type);if(cat!=="all")rows=rows.filter(p=>p.category===cat);rows.sort((a,b)=>sort==="priceAsc"?priceFor(a)-priceFor(b):sort==="priceDesc"?priceFor(b)-priceFor(a):sort==="stockAsc"?(a.stock||0)-(b.stock||0):sort==="stockDesc"?(b.stock||0)-(a.stock||0):String(a.name).localeCompare(String(b.name),"ru"));return rows;}
-function drawCarousel(){const host=$("#productCarousel");if(!host)return;const featured=products.filter(p=>p.showInCarousel!==false);if(!featured.length){host.innerHTML='<p class="empty">Администратор пока не выбрал товары для карусели.</p>';$("#carouselDots").innerHTML="";return;}carouselIndex=carouselIndex%featured.length;host.innerHTML=featured.map((p,i)=>`<article class="carousel-card" style="transform:translateX(calc(${(i-carouselIndex)*100}% + ${(i-carouselIndex)*16}px))"><div class="carousel-image">${p.imageUrl?`<img src="${safe(p.imageUrl)}" alt="${safe(p.name)}">`:'<span>МИР ТАЧЕК</span>'}</div><div class="carousel-info"><small>${safe(p.category||"Каталог")}</small><h3>${safe(p.name)}</h3><p>${safe(p.description||"")}</p><b>${money(priceFor(p))}</b><div class="inline-actions"><button class="btn btn-primary" data-add="${safe(p.id)}">В корзину</button>${p.productUrl?`<a class="btn btn-outline" href="${safe(p.productUrl)}" target="_blank" rel="noopener">Подробнее</a>`:""}</div></div></article>`).join("");$("#carouselDots").innerHTML=featured.map((_,i)=>`<button data-carousel-dot="${i}" class="${i===carouselIndex?"active":""}" aria-label="Позиция ${i+1}"></button>`).join("");}
-function carouselMove(n){const count=products.filter(p=>p.showInCarousel!==false).length;if(!count)return;carouselIndex=(carouselIndex+n+count)%count;drawCarousel();}
-function carouselStart(){carouselStop();carouselTimer=setInterval(()=>carouselMove(1),4200);}
-function carouselStop(){if(carouselTimer)clearInterval(carouselTimer);carouselTimer=null;}
-function renderCatalog(){if(!$("#catalogGrid"))return;let rows=filteredCatalog();if(favoritesOnly)rows=rows.filter(p=>favorites.has(p.id));let page=activePage.catalog;$("#catalogGrid").innerHTML=paginate(rows,page).map(productCard).join("")||'<div class="empty">По вашему запросу ничего не найдено.</div>';pager("#catalogPager",rows.length,page,p=>{activePage.catalog=p;renderCatalog();});$("#favoriteCount").textContent=favorites.size;const cats=[...new Set(products.map(p=>p.category).filter(Boolean))];const sel=$("#categoryFilter"),old=sel.value;sel.innerHTML='<option value="all">Все категории</option>'+cats.map(c=>`<option value="${safe(c)}">${safe(c)}</option>`).join("");sel.value=cats.includes(old)?old:"all";$("#statProducts").textContent=products.filter(p=>p.type!=="service").length;$("#statServices").textContent=products.filter(p=>p.type==="service").length;drawCarousel();}
-function renderServices(){const rows=products.filter(p=>p.type==="service");$("#serviceGrid").innerHTML=rows.slice(0,6).map(productCard).join("")||'<div class="empty">Услуги пока не добавлены в каталог.</div>';}
-function renderCart(){const count=cart.reduce((n,x)=>n+x.qty,0);$("#cartCount").textContent=count;$("#cartLines").innerHTML=cart.map(x=>`<div class="cart-line"><div><b>${safe(x.name)}</b><small>${money(x.price)} за ед.</small></div><div class="qty"><button data-qty="${safe(x.id)}" data-step="-1">−</button><span>${x.qty}</span><button data-qty="${safe(x.id)}" data-step="1">+</button><button data-remove="${safe(x.id)}" class="remove">Удалить</button></div><b>${money(x.price*x.qty)}</b></div>`).join("")||'<p class="empty">Корзина пуста.</p>';$("#cartTotal").textContent="Итого: "+money(cart.reduce((n,x)=>n+x.price*x.qty,0));localStorage.setItem(CART_KEY,JSON.stringify(cart));}
-function addToCart(p){const found=cart.find(x=>x.id===p.id);if(found)found.qty++;else cart.push({id:p.id,name:p.name,price:priceFor(p),qty:1,type:p.type});renderCart();notice("Позиция добавлена в корзину.");}
-function toggleFavorite(id){favorites.has(id)?favorites.delete(id):favorites.add(id);localStorage.setItem(FAV_KEY,JSON.stringify([...favorites]));renderCatalog();}
-function openProduct(id){const p=products.find(x=>x.id===id);if(!p)return;const body=$("#modalContent");body.innerHTML=`<div class="detail-layout">${p.imageUrl?`<img src="${safe(p.imageUrl)}" alt="${safe(p.name)}">`:'<div class="detail-placeholder">МИР ТАЧЕК</div>'}<div><span class="eyebrow">${safe(p.category||"")}</span><h2>${safe(p.name)}</h2><p>${safe(p.description||"")}</p><b class="price">${money(priceFor(p))}</b><p class="muted">${p.type==="service"?"Услуга доступна для записи":"Остаток: "+(p.stock||0)}</p><div class="inline-actions"><button class="btn btn-primary" data-add="${safe(p.id)}">${p.type==="service"?"Записаться":"В корзину"}</button><button class="btn btn-outline" data-wa-item="${safe(p.id)}">WhatsApp</button></div></div></div>`;$("#modal").classList.remove("hidden");DB.save("views",{productId:p.id,productName:p.name,uid:user?.uid||null,role,viewedAt:nowISO(),createdAt:nowISO()}).catch(()=>{});}
-function openWhatsApp(phone,text){const clean=String(phone||"").replace(/\D/g,"");if(!clean){notice("Добавьте номер телефона в карточку контакта.");return;}window.open(`https://wa.me/${clean}?text=${encodeURIComponent(text)}`,"_blank","noopener");}
-function itemWhatsApp(id){const p=products.find(x=>x.id===id);if(p)openWhatsApp("",`Здравствуйте! Интересует позиция «${p.name}». Подскажите, пожалуйста, наличие и условия.`);}
-function filteredDocuments(){let rows=documents.filter(d=>isAdmin()||d.uid===user?.uid||d.storeUid===user?.uid||d.dealerUid===user?.uid);const type=$("#docTypeFilter").value,pay=$("#debtFilter").value;if(type!=="all")rows=rows.filter(d=>d.docType===type);if(pay==="debt")rows=rows.filter(d=>(Number(d.total)||0)>(Number(d.paidAmount)||0));if(pay==="paid")rows=rows.filter(d=>(Number(d.total)||0)<=(Number(d.paidAmount)||0));return rows.sort((a,b)=>(dateValue(b.createdAt)?.getTime()||0)-(dateValue(a.createdAt)?.getTime()||0));}
-function renderDocuments(){const rows=filteredDocuments(),page=activePage.documents;$("#documentsList").innerHTML=paginate(rows,page).map(d=>`<div class="document-row"><div><b>${safe(d.number||d.id.slice(0,8))} · ${safe({retail:"Розничный заказ",shipment:"Отгрузка",preorder:"Предзаказ"}[d.docType]||d.docType)}</b><small>${safe(d.customerName||d.storeName||"Клиент")} · ${dateValue(d.createdAt)?.toLocaleString("ru-RU")||"Дата не указана"}</small></div><div><b>${money(d.total)}</b><small>Оплачено: ${money(d.paidAmount)} · Долг: ${money(Math.max(0,d.total-d.paidAmount))}</small></div><span class="status">${safe(d.status||"Новый")}</span><div class="row-actions"><button class="btn btn-quiet" data-receipt="${safe(d.id)}">Чек</button>${(role==="store"||isAdmin())&&d.docType==="shipment"&&d.status!=="accepted"?`<button class="btn btn-outline" data-accept="${safe(d.id)}">Принял в долг</button><button class="btn btn-outline" data-accept-cash="${safe(d.id)}">Принял за наличные</button>`:""}</div></div>`).join("")||'<div class="empty">Документы не найдены.</div>';pager("#documentsPager",rows.length,page,p=>{activePage.documents=p;renderDocuments();});$("#statOrders").textContent=documents.length;}
-function receiptMarkup(d){return `<div class="receipt"><div class="receipt-brand">МИР ТАЧЕК</div><h2>${d.docType==="shipment"?"НАКЛАДНАЯ":d.docType==="preorder"?"ПРЕДЗАКАЗ":"ВНУТРЕННИЙ ДОКУМЕНТ"}</h2><p>Документ № ${safe(d.number||d.id)}</p><p>Дата: ${dateValue(d.createdAt)?.toLocaleString("ru-RU")||"—"}</p><p>Дилер: ${safe(d.dealerName||"—")}</p><p>Клиент / магазин: ${safe(d.customerName||d.storeName||"—")}</p><hr>${(d.items||[]).map(x=>`<div class="receipt-line"><span>${safe(x.name)} × ${x.qty}</span><b>${money(x.price*x.qty)}</b></div>`).join("")}<hr><h3>Итого: ${money(d.total)}</h3><p>Оплачено: ${money(d.paidAmount)} · Долг: ${money(Math.max(0,d.total-d.paidAmount))}</p><p class="payment-stamp">${Number(d.paidAmount)>=Number(d.total)?"ОПЛАЧЕНО":Number(d.paidAmount)>0?"ЧАСТИЧНО ОПЛАЧЕНО":"В ДОЛГ"}</p><p>Оплата: ${safe(d.paymentType||"—")} · Наличные: ${money(d.cashAmount??(d.paymentType==="cash"?d.paidAmount:0))} · Перевод: ${money(d.transferAmount??(d.paymentType==="transfer"?d.paidAmount:0))}</p><small>Не является фискальным кассовым чеком.</small></div>`;}
-function showReceipt(id){const d=documents.find(x=>x.id===id);if(!d)return;$("#receiptContent").innerHTML=receiptMarkup(d);$("#receipt").classList.remove("hidden");}
-async function createDocument(form){if(!user){notice("Войдите, чтобы оформить документ.");await login();return;}if(!cart.length){notice("Корзина пуста.");return;}const fd=new FormData(form),docType=fd.get("docType"),items=cart.map(x=>({...x})),total=items.reduce((n,x)=>n+x.price*x.qty,0),paymentType=fd.get("paymentType"),enteredPaid=Math.max(0,Number(fd.get("paidAmount"))||0),paid=paymentType==="cash"||paymentType==="transfer"?total:paymentType==="partial"?Math.min(total,enteredPaid):0;if(docType==="shipment"&&role!=="dealer"&&!isAdmin()){notice("Отгрузку в магазин может оформить дилер или администратор.");return;}if(docType==="preorder"&&role==="customer"){notice("Предзаказ доступен магазинам, дилерам и администратору.");return;}if(docType==="shipment"&&!fd.get("storeName")){notice("Укажите магазин-получатель.");return;}const record={number:"MT-"+Date.now(),docType,uid:user.uid,dealerUid:role==="dealer"?user.uid:null,storeUid:null,role,customerName:fd.get("customerName")||profile?.name||user.displayName||"",storeName:fd.get("storeName")||"",dealerName:fd.get("dealerName")||profile?.name||"",phone:fd.get("phone")||"",delivery:fd.get("delivery"),address:fd.get("address")||"",paymentType,paidAmount:paid,cashAmount:paymentType==="cash"?paid:paymentType==="partial"&&fd.get("partialMethod")==="cash"?paid:0,transferAmount:paymentType==="transfer"?paid:paymentType==="partial"&&fd.get("partialMethod")==="transfer"?paid:0,total,items,costTotal:items.reduce((n,x)=>{const p=products.find(p=>p.id===x.id);return n+(Number(p?.costPrice)||0)*x.qty;},0),comment:fd.get("comment")||"",status:docType==="preorder"?"preorder":"new",createdAt:nowISO()};try{let saved;if(F.firebaseConfigured&&!F.USE_DEMO){const result=await F.httpsCallable(F.functions,"createDocument")({docType,storeName:record.storeName,customerName:record.customerName,phone:record.phone,delivery:record.delivery,address:record.address,paymentType,paidAmount:paid,partialMethod:fd.get("partialMethod"),comment:record.comment,items:items.map(x=>({productId:x.id,qty:x.qty}))});saved={...result.data,id:result.data.id};await Promise.all([DB.load("documents"),DB.load("products")]);}else{saved=await DB.save("documents",record);if(docType!=="preorder"){for(const x of items){const p=products.find(p=>p.id===x.id);if(p&&p.type!=="service"){p.stock=Math.max(0,(Number(p.stock)||0)-x.qty);await DB.save("products",p,p.id);}}}}documents=DB.list("documents");products=DB.list("products");cart=[];renderCart();renderCatalog();renderDocuments();renderReports();$("#cartDrawer").classList.add("hidden");$("#receiptContent").innerHTML=receiptMarkup(saved);$("#receipt").classList.remove("hidden");notice("Документ оформлен.");}catch(e){notice("Не удалось провести документ: "+e.message);}}
-function renderCRM(){let rows=contacts.filter(c=>isAdmin()||c.uid===user?.uid);const q=$("#crmSearch").value.trim().toLowerCase(),stage=$("#crmStage").value;if(q)rows=rows.filter(c=>(c.name+" "+c.phone+" "+c.title).toLowerCase().includes(q));if(stage!=="all")rows=rows.filter(c=>c.stage===stage);const page=activePage.crm;$("#crmList").innerHTML=paginate(rows,page).map(c=>`<article class="contact-card"><div><span class="contact-type">${safe(c.type||"Покупатель")}</span><h3>${safe(c.name)}</h3><p>${safe(c.phone||"Телефон не указан")}</p><small>Этап: ${safe(c.stage||"Новый")}</small><small>Задача: ${safe(c.task||"Не назначена")}</small></div><div class="contact-actions"><button class="btn btn-outline" data-contact-wa="${safe(c.id)}">WhatsApp</button>${isAdmin()?`<button class="btn btn-quiet" data-edit-contact="${safe(c.id)}">Изменить</button>`:""}</div></article>`).join("")||'<div class="empty">Контакты пока не добавлены.</div>';pager("#crmPager",rows.length,page,p=>{activePage.crm=p;renderCRM();});}
-function contactForm(id=null){const c=contacts.find(x=>x.id===id)||{};$("#modalContent").innerHTML=`<h2>${id?"Изменить контакт":"Новый контакт"}</h2><form id="contactEditor" class="form-grid"><input name="name" placeholder="Название / ФИО" value="${safe(c.name||"")}" required><input name="phone" placeholder="Телефон WhatsApp" value="${safe(c.phone||"")}" required><select name="type"><option ${c.type==="Покупатель"?"selected":""}>Покупатель</option><option ${c.type==="Магазин"?"selected":""}>Магазин</option><option ${c.type==="Дилер"?"selected":""}>Дилер</option></select><select name="stage"><option>Новый</option><option ${c.stage==="В работе"?"selected":""}>В работе</option><option ${c.stage==="Ожидает"?"selected":""}>Ожидает</option><option ${c.stage==="Постоянный"?"selected":""}>Постоянный</option></select><input name="task" placeholder="Следующая задача" value="${safe(c.task||"")}"><input name="customerUid" placeholder="UID клиента в Firebase (для сценариев)" value="${safe(c.customerUid||"")}"><button class="btn btn-primary">Сохранить</button></form>`;$("#modal").classList.remove("hidden");$("#contactEditor").onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.uid=c.uid||user.uid;await DB.save("contacts",data,id);contacts=DB.list("contacts");$("#modal").classList.add("hidden");renderCRM();};}
-function scenarioText(s,c){if(s==="viewed")return `Здравствуйте, ${c.name}! Вы недавно интересовались товаром в каталоге «Мир Тачек». Для вас можем подготовить специальное предложение или подарок. Актуально?`;if(s==="new")return `Здравствуйте, ${c.name}! В каталоге «Мир Тачек» появились новинки. Напишите, и мы отправим подборку.`;return `Здравствуйте, ${c.name}! Хотим сверить взаиморасчёты и напомнить о задолженности. Подскажите, когда удобно обсудить?`;}
-function runScenario(s){
- let targets=[];
- if(s==="viewed") {const cutoff=Date.now()-7*86400000,recent=views.filter(v=>v.productId&&v.uid&&dateValue(v.viewedAt||v.createdAt)?.getTime()>=cutoff);const ids=new Set(recent.map(v=>v.uid));targets=contacts.filter(c=>c.customerUid&&ids.has(c.customerUid));}
- else if(s==="debt"){const ids=new Set(documents.filter(d=>Number(d.total)>Number(d.paidAmount)).map(d=>d.customerUid||d.uid));targets=contacts.filter(c=>c.customerUid&&ids.has(c.customerUid));}
- else targets=contacts.filter(c=>c.phone);
- const host=$("#scenarioResult");if(!targets.length){host.textContent=s==="viewed"?"Не найдено просмотров за последние 7 дней, связанных с контактами CRM. Заполните поле UID клиента в карточке контакта.":"Нет контактов, подходящих для этого сценария.";return;}
- host.innerHTML=targets.map(c=>{const text=scenarioText(s,c),url=`https://wa.me/${String(c.phone||"").replace(/\D/g,"")}?text=${encodeURIComponent(text)}`;return `<p><b>${safe(c.name)}</b> · <a href="${url}" target="_blank" rel="noopener">Открыть WhatsApp</a></p>`;}).join("");DB.save("views",{action:"whatsapp-scenario",scenario:s,targetCount:targets.length,createdAt:nowISO()}).catch(()=>{});
+function invalidate(name) { if (name) delete built[name]; else Object.keys(built).forEach((k) => delete built[k]); }
+
+function render() {
+  const key = D.role() + '|' + (Data.profile ? Data.profile.uid : '');
+  if (key !== builtFor) { invalidate(); builtFor = key; }
+  if (!ROLES[D.role()].tabs.includes(S.view)) S.view = 'catalog';
+  renderHeader();
+  renderTabs();
+  $$('.view').forEach((el) => { el.hidden = el.id !== 'view-' + S.view; });
+  renderView();
 }
-function reportFiltered(){let rows=documents.filter(d=>isAdmin()||d.uid===user?.uid||d.dealerUid===user?.uid||d.storeUid===user?.uid);const period=$("#reportPeriod").value,from=$("#dateFrom").value,to=$("#dateTo").value,now=new Date();return rows.filter(d=>{const dt=dateValue(d.createdAt);if(!dt)return false;if(period==="day")return dt.toDateString()===now.toDateString();if(period==="week")return dt>=new Date(now.getTime()-7*86400000);if(period==="month")return dt.getMonth()===now.getMonth()&&dt.getFullYear()===now.getFullYear();if(period==="range")return (!from||dt>=new Date(from+"T00:00:00"))&&(!to||dt<=new Date(to+"T23:59:59"));return true;});}
-async function sendDealerReport(){const mine=documents.filter(d=>d.dealerUid===user?.uid||d.uid===user?.uid&&d.role==="dealer"),total=mine.reduce((n,d)=>n+(Number(d.total)||0),0),cash=mine.reduce((n,d)=>n+(Number(d.cashAmount??(d.paymentType==="cash"?d.paidAmount:0))||0),0),transfer=mine.reduce((n,d)=>n+(Number(d.transferAmount??(d.paymentType==="transfer"?d.paidAmount:0))||0),0),debt=mine.reduce((n,d)=>n+Math.max(0,(Number(d.total)||0)-(Number(d.paidAmount)||0)),0);try{await DB.save("roleReports",{dealerUid:user.uid,dealerName:profile?.name||user.displayName||"",total,cash,transfer,debt,documentIds:mine.map(d=>d.id),createdAt:nowISO()});notice("Отчёт дилера отправлен в систему администратору.");}catch(e){notice("Не удалось отправить отчёт: "+e.message);}}
-function renderReports(){reportRows=reportFiltered();const sum=(key)=>reportRows.reduce((n,d)=>n+(Number(d[key])||0),0),revenue=sum("total"),cost=sum("costTotal"),cash=reportRows.reduce((n,d)=>n+(Number(d.cashAmount??(d.paymentType==="cash"?d.paidAmount:0))||0),0),transfer=reportRows.reduce((n,d)=>n+(Number(d.transferAmount??(d.paymentType==="transfer"?d.paidAmount:0))||0),0),debt=reportRows.reduce((n,d)=>n+Math.max(0,(Number(d.total)||0)-(Number(d.paidAmount)||0)),0),stock=products.reduce((n,p)=>n+(Number(p.costPrice)||0)*(Number(p.stock)||0),0);[["#mRevenue",revenue],["#mCost",cost],["#mProfit",revenue-cost],["#mCash",cash],["#mTransfer",transfer],["#mDebt",debt],["#mStock",stock]].forEach(([s,v])=>$(s).textContent=money(v));const page=activePage.reports;$("#reportTable").innerHTML=`${isAdmin()?`<h3>Сводка по дилерам</h3><div class="table-wrap"><table><thead><tr><th>Дилер</th><th>Итого</th><th>Наличные</th><th>Перевод</th><th>В долг</th></tr></thead><tbody>${Object.values(reportRows.filter(d=>d.dealerName).reduce((a,d)=>{const k=d.dealerName;a[k]??={name:k,total:0,cash:0,transfer:0,debt:0};a[k].total+=Number(d.total)||0;a[k].cash+=Number(d.cashAmount??(d.paymentType==="cash"?d.paidAmount:0))||0;a[k].transfer+=Number(d.transferAmount??(d.paymentType==="transfer"?d.paidAmount:0))||0;a[k].debt+=Math.max(0,(Number(d.total)||0)-(Number(d.paidAmount)||0));return a;},{})).map(x=>`<tr><td>${safe(x.name)}</td><td>${money(x.total)}</td><td>${money(x.cash)}</td><td>${money(x.transfer)}</td><td>${money(x.debt)}</td></tr>`).join("")}</tbody></table></div>`:""}<table><thead><tr><th>Документ</th><th>Дата</th><th>Клиент / магазин</th><th>Выручка</th><th>Себестоимость</th><th>Оплачено</th><th>Долг</th></tr></thead><tbody>${paginate(reportRows,page).map(d=>`<tr><td>${safe(d.number||d.id)}</td><td>${dateValue(d.createdAt)?.toLocaleDateString("ru-RU")||"—"}</td><td>${safe(d.customerName||d.storeName||"—")}</td><td>${money(d.total)}</td><td>${money(d.costTotal)}</td><td>${money(d.paidAmount)}</td><td>${money(Math.max(0,d.total-d.paidAmount))}</td></tr>`).join("")}</tbody></table>`;pager("#reportPager",reportRows.length,page,p=>{activePage.reports=p;renderReports();});}
-function renderAdmin(){if(!isAdmin()||!$("#adminPanel"))return;const host=$("#adminPanel");if(adminTab==="products"){const page=activePage.admin,rows=paginate(products,page);host.innerHTML=`<div class="admin-toolbar"><button id="newProduct" class="btn btn-primary">Добавить товар / услугу</button><button id="exportCatalog" class="btn btn-outline">Экспорт каталога</button></div><div class="table-wrap"><table><thead><tr><th>Название</th><th>Тип</th><th>Розница</th><th>Магазин</th><th>Дилер</th><th>Закуп</th><th>Остаток</th><th>Карусель</th><th>Действия</th></tr></thead><tbody>${rows.map(p=>`<tr><td>${safe(p.name)}</td><td>${safe(p.type)}</td><td>${money(p.retailPrice)}</td><td>${money(p.storePrice)}</td><td>${money(p.dealerPrice)}</td><td>${money(p.costPrice)}</td><td>${p.stock||0}</td><td>${p.showInCarousel===false?"Нет":"Да"}</td><td><button data-edit-product="${safe(p.id)}">Изменить</button> <button data-delete-product="${safe(p.id)}" class="danger-text">Удалить</button></td></tr>`).join("")}</tbody></table></div><div id="adminPager" class="pager"></div>`;pager("#adminPager",products.length,page,p=>{activePage.admin=p;renderAdmin();});$("#newProduct").onclick=()=>productForm();$("#exportCatalog").onclick=()=>exportRows(products,"catalog");}else if(adminTab==="users"){const page=activePage.admin,rows=paginate(users,page);host.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Пользователь</th><th>Email</th><th>Роль</th><th>Статус</th></tr></thead><tbody>${rows.map(u=>`<tr><td>${safe(u.name)}</td><td>${safe(u.email)}</td><td><select data-user-role="${safe(u.id)}"><option value="customer" ${["customer","buyer"].includes(u.role)?"selected":""}>Покупатель</option><option value="store" ${u.role==="store"?"selected":""}>Магазин</option><option value="dealer" ${u.role==="dealer"?"selected":""}>Дилер</option></select></td><td>${u.blocked?"Заблокирован":"Активен"}</td></tr>`).join("")}</tbody></table></div><div id="adminPager" class="pager"></div>`;pager("#adminPager",users.length,page,p=>{activePage.admin=p;renderAdmin();});}else if(adminTab==="requests"){const requests=DB.list("requests").sort((a,b)=>(dateValue(b.createdAt)?.getTime()||0)-(dateValue(a.createdAt)?.getTime()||0)),page=activePage.admin,rows=paginate(requests,page);host.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Дата</th><th>Имя</th><th>Телефон</th><th>Запрос</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${dateValue(r.createdAt)?.toLocaleString("ru-RU")||"—"}</td><td>${safe(r.name||"—")}</td><td>${safe(r.phone||"—")}</td><td>${safe(r.details||"")}</td></tr>`).join("")}</tbody></table></div><div id="adminPager" class="pager"></div>`;pager("#adminPager",requests.length,page,p=>{activePage.admin=p;renderAdmin();});}else if(adminTab==="dealerReports"){const reports=DB.list("roleReports").sort((a,b)=>(dateValue(b.createdAt)?.getTime()||0)-(dateValue(a.createdAt)?.getTime()||0)),page=activePage.admin,rows=paginate(reports,page);host.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Дата</th><th>Дилер</th><th>Итого</th><th>Наличные</th><th>Перевод</th><th>В долг</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${dateValue(r.createdAt)?.toLocaleString("ru-RU")||"—"}</td><td>${safe(r.dealerName||r.dealerUid)}</td><td>${money(r.total)}</td><td>${money(r.cash)}</td><td>${money(r.transfer)}</td><td>${money(r.debt)}</td></tr>`).join("")}</tbody></table></div><div id="adminPager" class="pager"></div>`;pager("#adminPager",reports.length,page,p=>{activePage.admin=p;renderAdmin();});}else if(adminTab==="warehouse"){host.innerHTML=`<div class="import-panel"><h3>Приход / списание товара</h3><form id="stockForm" class="form-grid"><label>Товар<select name="productId" required>${products.filter(x=>x.type!=="service").map(x=>`<option value="${safe(x.id)}">${safe(x.name)} · остаток ${Number(x.stock)||0}</option>`).join("")}</select></label><label>Операция<select name="operation"><option value="receipt">Приход</option><option value="writeoff">Списание</option></select></label><label>Количество<input name="quantity" type="number" min="1" step="1" required></label><label>Основание<input name="reason" placeholder="Закупка, возврат, инвентаризация"></label><button class="btn btn-primary">Провести операцию</button></form><p id="stockMessage" class="muted"></p></div>`;$("#stockForm").onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target);try{if(F.firebaseConfigured&&!F.USE_DEMO){await F.httpsCallable(F.functions,"adjustStock")(Object.fromEntries(fd));await DB.load("products");}else{const prod=products.find(x=>x.id===fd.get("productId"));const qty=Number(fd.get("quantity"));if(!prod||qty<1)throw new Error("Проверьте товар и количество");prod.stock=Math.max(0,(Number(prod.stock)||0)+(fd.get("operation")==="receipt"?qty:-qty));await DB.save("products",prod,prod.id);}products=DB.list("products");renderCatalog();renderAdmin();notice("Складская операция проведена.");}catch(err){$("#stockMessage").textContent="Ошибка: "+err.message;}};}else if(adminTab==="settings"){host.innerHTML=`<div class="import-panel"><h3>Настройки компании</h3><form id="settingsForm" class="form-grid"><label>Название компании<input name="businessName" value="${safe(appSettings.businessName||"МИР ТАЧЕК")}"></label><label>WhatsApp компании<input name="businessWhatsapp" placeholder="77001234567" value="${safe(appSettings.businessWhatsapp||"")}"></label><button class="btn btn-primary">Сохранить настройки</button></form><p class="muted">Укажите номер в международном формате с кодом страны, без пробелов и знака +.</p></div>`;$("#settingsForm").onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target);await saveSettings({businessName:String(fd.get("businessName")||"МИР ТАЧЕК").trim(),businessWhatsapp:String(fd.get("businessWhatsapp")||"").replace(/\D/g,"")});};}else{host.innerHTML=`<div class="import-panel"><h3>Импорт и экспорт каталога</h3><p>Поддерживаются CSV, JSON и XLSX. Поля: name, type, category, description, retailPrice, storePrice, dealerPrice, costPrice, stock, imageUrl, isNew.</p><input id="importFile" type="file" accept=".csv,.xlsx,.json"><button id="doImport" class="btn btn-primary">Импортировать</button><button id="downloadTemplate" class="btn btn-outline">Скачать шаблон XLSX</button><button id="exportJson" class="btn btn-outline">Экспорт JSON</button><p id="importMessage" class="muted"></p></div>`;$("#doImport").onclick=importCatalog;$("#downloadTemplate").onclick=downloadTemplate;$("#exportJson").onclick=()=>downloadFile("catalog.json",JSON.stringify(products,null,2),"application/json");}}
-function productForm(id=null){const p=products.find(x=>x.id===id)||{};$("#modalContent").innerHTML=`<h2>${id?"Редактировать позицию":"Новая позиция каталога"}</h2><form id="productEditor" class="form-grid"><label>Название<input name="name" required value="${safe(p.name||"")}"></label><label>Тип<select name="type"><option value="product" ${p.type!=="service"?"selected":""}>Товар</option><option value="service" ${p.type==="service"?"selected":""}>Услуга</option></select></label><label>Категория<input name="category" value="${safe(p.category||"")}"></label><label>Розничная цена<input name="retailPrice" type="number" min="0" value="${p.retailPrice??p.price??0}"></label><label>Цена магазина<input name="storePrice" type="number" min="0" value="${p.storePrice??0}"></label><label>Цена дилера<input name="dealerPrice" type="number" min="0" value="${p.dealerPrice??0}"></label><label>Закуп / себестоимость<input name="costPrice" type="number" min="0" value="${p.costPrice??0}"></label><label>Остаток<input name="stock" type="number" min="0" value="${p.stock??0}"></label><label class="full">Описание<textarea name="description">${safe(p.description||"")}</textarea></label><label class="full">Фото URL<input name="imageUrl" type="url" value="${safe(p.imageUrl||"")}" placeholder="https://..."></label><label class="full">Ссылка на товар<input name="productUrl" type="url" value="${safe(p.productUrl||"")}" placeholder="https://..."></label><label><input type="checkbox" name="showInCarousel" ${p.showInCarousel!==false?"checked":""}> Показывать в карусели на главной</label><label class="full">Загрузить фото<input name="imageFile" type="file" accept="image/*"></label><label><input type="checkbox" name="isNew" ${p.isNew?"checked":""}> Новинка каталога</label><button class="btn btn-primary">Сохранить</button></form>`;$("#modal").classList.remove("hidden");$("#productEditor").onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target),data=Object.fromEntries(fd);data.name=String(data.name).trim();for(const k of ["retailPrice","storePrice","dealerPrice","costPrice","stock"])data[k]=Math.max(0,Number(data[k])||0);data.isNew=fd.get("isNew")==="on";data.showInCarousel=fd.get("showInCarousel")==="on";const file=fd.get("imageFile");if(file?.size)data.imageUrl=await DB.upload(file,"product-images");delete data.imageFile;await DB.save("products",data,id);products=DB.list("products");if(!products.length)products=await DB.load("products");$("#modal").classList.add("hidden");renderCatalog();renderServices();renderAdmin();notice("Позиция каталога сохранена.");};}
-function exportRows(rows,name){if(!window.XLSX){downloadFile(name+".csv",toCSV(rows),"text/csv;charset=utf-8");return;}const ws=XLSX.utils.json_to_sheet(rows),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"Данные");XLSX.writeFile(wb,name+".xlsx");}
-function toCSV(rows){if(!rows.length)return "";const keys=Object.keys(rows[0]);return [keys.join(";"),...rows.map(r=>keys.map(k=>'"'+String(typeof r[k]==="object"?JSON.stringify(r[k]):r[k]??"").replace(/"/g,'""')+'"').join(";"))].join("\n");}
-function downloadFile(name,data,type){const a=document.createElement("a"),url=URL.createObjectURL(new Blob([data],{type}));a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
-async function importCatalog(){const file=$("#importFile").files[0];if(!file)return $("#importMessage").textContent="Выберите файл.";try{let rows;if(file.name.endsWith(".json"))rows=JSON.parse(await file.text());else if(file.name.endsWith(".csv")){const text=await file.text(),lines=text.split(/\r?\n/).filter(Boolean),heads=lines.shift().split(/[;,]/);rows=lines.map(line=>Object.fromEntries(line.split(/[;,]/).map((v,i)=>[heads[i],v.replace(/^"|"$/g,"")])));}else{const wb=XLSX.read(await file.arrayBuffer(),{type:"array"});rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);}for(const r of rows){for(const k of ["retailPrice","storePrice","dealerPrice","costPrice","stock"])r[k]=Number(r[k])||0;r.type=r.type==="service"?"service":"product";r.isNew=r.isNew===true||r.isNew==="true";await DB.save("products",r,r.id||null);}products=DB.list("products");renderCatalog();renderAdmin();$("#importMessage").textContent=`Импортировано записей: ${rows.length}`;}catch(e){$("#importMessage").textContent="Ошибка импорта: "+e.message;}}
-function downloadTemplate(){const rows=[{name:"Пример товара",type:"product",category:"Фильтры",description:"Описание",retailPrice:1000,storePrice:900,dealerPrice:800,costPrice:600,stock:10,imageUrl:"",isNew:false}];const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),"Каталог");XLSX.writeFile(wb,"mir-tachek-catalog-template.xlsx");}
-async function login(){if(!F.firebaseConfigured){notice("Для входа настройте Firebase config в js/firebase.js.");return;}try{const r=await F.signInWithPopup(F.auth,new F.GoogleAuthProvider());user=r.user;await ensureProfile(user);await refreshAll();}catch(e){notice("Ошибка входа: "+e.message);}}
-async function ensureProfile(u){let ref=F.doc(F.db,"users",u.uid),snap=await F.getDoc(ref);if(!snap.exists())await F.setDoc(ref,{uid:u.uid,name:u.displayName||"",email:u.email||"",phone:"",role:"customer",blocked:false,createdAt:F.serverTimestamp()});else await F.updateDoc(ref,{lastLoginAt:F.serverTimestamp()});profile=(await F.getDoc(ref)).data();role=profile?.role||"customer";$("#loginBtn").textContent=profile?.name||"Аккаунт";setRole(role);}
-async function refreshAll(){const names=["products","documents","contacts","users","views","requests","roleReports","orders"];await Promise.all(names.map(n=>DB.load(n)));await loadSettings();views=DB.list("views");
- // Compatibility bridge: retain documents from the original project collection `orders` and its product schema.
- const normalized=DB.list("products").map(p=>({...p,type:p.type||(p.category==="service"?"service":"product"),category:p.category==="cart"?"Тачки":p.category==="weld"?"Металлоизделия":p.category,retailPrice:p.retailPrice??p.price??0,storePrice:p.storePrice??p.price??0,dealerPrice:p.dealerPrice??p.price??0,costPrice:p.costPrice??0,stock:p.stock??0}));
- if(normalized.length){products=normalized;DB.cache.products=normalized;DB.writeCache();}else products=seedProducts.map(p=>({...p}));
- const legacyOrders=DB.list("orders").map(o=>({...o,docType:o.docType||"retail",createdAt:o.createdAt||o.date||nowISO(),paidAmount:o.paidAmount??(o.status==="paid"?o.total:0),items:o.items||[]}));
- documents=[...DB.list("documents"),...legacyOrders.filter(o=>!DB.list("documents").some(d=>d.id===o.id))];DB.cache.documents=documents;DB.writeCache();contacts=DB.list("contacts");users=DB.list("users");renderCatalog();renderServices();renderDocuments();renderCRM();renderReports();renderAdmin();renderCart();carouselStart();}
-async function sendWhatsAppOrder(){if(!cart.length)return notice("Корзина пуста.");const lines=cart.map(x=>`${x.name} × ${x.qty} — ${money(x.price*x.qty)}`).join("\n"),total=cart.reduce((n,x)=>n+x.price*x.qty,0),text=`Здравствуйте! Заказ в «Мир Тачек»:\n${lines}\nИтого: ${money(total)}`;const phone=businessPhone();if(!phone){notice("Администратор должен указать WhatsApp-номер компании в настройках.");return;}openWhatsApp(phone,text);}
-async function acceptShipment(id,cash){const d=documents.find(x=>x.id===id);if(!d)return;try{if(F.firebaseConfigured&&!F.USE_DEMO){await F.httpsCallable(F.functions,"acceptShipment")({documentId:id,acceptanceType:cash?"cash":"debt"});await DB.load("documents");}else{d.status="accepted";d.acceptedAt=nowISO();d.acceptanceType=cash?"cash":"debt";if(cash)d.paidAmount=d.total;await DB.save("documents",d,id);}documents=DB.list("documents");renderDocuments();renderReports();notice(cash?"Приёмка подтверждена: за наличные.":"Приёмка подтверждена: принял в долг.");}catch(e){notice("Не удалось подтвердить приёмку: "+e.message);}}
-function bind(){$("#carouselPrev").onclick=()=>{carouselMove(-1);carouselStart();};$("#carouselNext").onclick=()=>{carouselMove(1);carouselStart();};$("#productCarousel").addEventListener("mouseenter",carouselStop);$("#productCarousel").addEventListener("mouseleave",carouselStart);$("#productCarousel").addEventListener("click",e=>{const d=e.target.closest("[data-carousel-dot]");if(d){carouselIndex=Number(d.dataset.carouselDot);drawCarousel();carouselStart();}});["#catalogSearch","#typeFilter","#categoryFilter","#sortFilter"].forEach(s=>$(s).addEventListener(s==="#catalogSearch"?"input":"change",()=>{activePage.catalog=1;renderCatalog();}));["#docTypeFilter","#debtFilter"].forEach(s=>$(s).onchange=renderDocuments);["#crmSearch","#crmStage"].forEach(s=>$(s).addEventListener(s==="#crmSearch"?"input":"change",()=>{activePage.crm=1;renderCRM();}));$("#reportPeriod").onchange=()=>{const range=$("#reportPeriod").value==="range";$("#dateFrom").disabled=$("#dateTo").disabled=!range;};$("#applyReport").onclick=()=>{activePage.reports=1;renderReports();};$("#exportXlsx").onclick=()=>exportRows(reportRows,"mir-tachek-report");$("#exportCsv").onclick=()=>downloadFile("mir-tachek-report.csv",toCSV(reportRows),"text/csv;charset=utf-8");$("#printReport").onclick=()=>window.print();$("#printReceipt").onclick=()=>window.print();$("#dealerReport").onclick=sendDealerReport;$("#cartOpen").onclick=()=>{$("#cartDrawer").classList.remove("hidden");renderCart();};$("#loginBtn").onclick=login;$("#favoritesToggle").onclick=()=>{favoritesOnly=!favoritesOnly;$("#favoritesToggle").classList.toggle("btn-primary",favoritesOnly);$("#favoritesToggle").classList.toggle("btn-outline",!favoritesOnly);activePage.catalog=1;renderCatalog();};$("#addContact").onclick=()=>contactForm();$("#requestForm").onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.uid=user?.uid||null;data.createdAt=nowISO();await DB.save("requests",data);e.target.reset();notice("Заявка сохранена.");};$("#checkoutForm").onsubmit=e=>{e.preventDefault();createDocument(e.currentTarget);};$("#whatsappOrder").onclick=sendWhatsAppOrder;$("#checkoutForm").elements.delivery.onchange=e=>$("#addressWrap").classList.toggle("hidden",e.target.value!=="delivery");$$('[data-admin-tab]').forEach(b=>b.onclick=()=>{adminTab=b.dataset.adminTab;$$('[data-admin-tab]').forEach(x=>x.classList.toggle("active",x===b));renderAdmin();});$$('[data-scenario]').forEach(b=>b.onclick=()=>runScenario(b.dataset.scenario));document.addEventListener("click",async e=>{const t=e.target.closest("[data-close]");if(t)$(t.dataset.close==="cart"?"#cartDrawer":"#"+t.dataset.close).classList.add("hidden");const add=e.target.closest("[data-add]");if(add){const p=products.find(x=>x.id===add.dataset.add);if(p)addToCart(p);}const fav=e.target.closest("[data-fav]");if(fav)toggleFavorite(fav.dataset.fav);const detail=e.target.closest("[data-detail]");if(detail)openProduct(detail.dataset.detail);const wa=e.target.closest("[data-wa-item]");if(wa){const p=products.find(x=>x.id===wa.dataset.waItem);if(p){const phone=businessPhone();if(phone)openWhatsApp(phone,`Здравствуйте! Интересует ${p.name}.`);else notice("Администратор должен указать WhatsApp-номер компании в настройках.");}}const qty=e.target.closest("[data-qty]");if(qty){const line=cart.find(x=>x.id===qty.dataset.qty);if(line){line.qty+=Number(qty.dataset.step);if(line.qty<=0)cart=cart.filter(x=>x.id!==line.id);renderCart();}}const rem=e.target.closest("[data-remove]");if(rem){cart=cart.filter(x=>x.id!==rem.dataset.remove);renderCart();}const rec=e.target.closest("[data-receipt]");if(rec)showReceipt(rec.dataset.receipt);const accept=e.target.closest("[data-accept]");if(accept)acceptShipment(accept.dataset.accept,false);const acceptCash=e.target.closest("[data-accept-cash]");if(acceptCash)acceptShipment(acceptCash.dataset.acceptCash,true);const cwa=e.target.closest("[data-contact-wa]");if(cwa){const c=contacts.find(x=>x.id===cwa.dataset.contactWa);if(c)openWhatsApp(c.phone,`Здравствуйте, ${c.name}! Это «Мир Тачек».`);}const editC=e.target.closest("[data-edit-contact]");if(editC)contactForm(editC.dataset.editContact);const editP=e.target.closest("[data-edit-product]");if(editP)productForm(editP.dataset.editProduct);const delP=e.target.closest("[data-delete-product]");if(delP&&confirm("Удалить позицию каталога?")){await DB.remove("products",delP.dataset.deleteProduct);products=DB.list("products");renderCatalog();renderAdmin();}});document.addEventListener("change",async e=>{const sel=e.target.closest("[data-user-role]");if(sel&&isAdmin()){const id=sel.dataset.userRole,newRole=sel.value;try{if(F.firebaseConfigured){await F.httpsCallable(F.functions,"setUserRole")({uid:id,role:newRole});}const u=users.find(x=>x.id===id);if(u){u.role=newRole;await DB.save("users",u,id);}notice("Роль пользователя обновлена.");}catch(err){notice("Не удалось изменить роль: "+err.message);}}});}
-async function init(){bind();renderCart();if(F.firebaseConfigured&&!F.USE_DEMO)DB.flush();if(F.firebaseConfigured&&!F.USE_DEMO){F.onAuthStateChanged(F.auth,async u=>{user=u;if(u)await ensureProfile(u);else{profile=null;role="customer";$("#loginBtn").textContent="Войти";setRole(role);}await refreshAll();});}else{products=DB.list("products");if(!products.length)products=seedProducts.map(p=>({...p}));documents=DB.list("documents");contacts=DB.list("contacts");users=DB.list("users");renderCatalog();renderServices();renderDocuments();renderCRM();renderReports();renderAdmin();setRole("customer");carouselStart();notice("LIVE-режим выбран. Для синхронизации подключите Firebase в js/firebase.js.");}}
-init();
+const scheduleRender = (() => { let raf = 0; return () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(render); }; })();
+const scheduleBody = debounce(() => renderView(), 160);
+
+function go(view) {
+  S.view = ROLES[D.role()].tabs.includes(view) ? view : 'catalog';
+  closeModal();
+  render();
+  window.scrollTo({ top: 0 });
+  try { history.replaceState(null, '', '#' + S.view); } catch (e) { /* ignore */ }
+}
+Object.assign(App, { render, renderView, invalidate, go });
+
+/* -------------------------------- Шапка ------------------------------- */
+function badgeCounts() {
+  const r = D.role();
+  const c = { cart: S.cart.reduce((s, l) => s + num(l.qty), 0), favorites: S.favs.length };
+  if (r !== 'guest') {
+    c.docs = D.myPendingAcceptance().length + D.myPendingConfirmations().length + (r === 'admin' ? D.disputedDocs().length : 0);
+    c.orders = r === 'admin' ? D.orders().filter((o) => o.status === 'new').length : r === 'dealer' ? D.orders().filter((o) => o.assignedDealerUid === D.myUid() && o.status === 'processing').length : 0;
+  }
+  return c;
+}
+
+function renderHeader() {
+  $('#brandMark').innerHTML = icon('logo');
+  $('#brandName').textContent = D.companyName();
+  const conn = $('#connStatus');
+  const mode = Data.mode;
+  conn.className = 'conn ' + (mode === 'live' ? 'conn--live' : mode === 'demo' ? 'conn--demo' : 'conn--off');
+  conn.innerHTML = `${icon(mode === 'live' ? 'cloud' : 'cloudOff')}<span>${mode === 'live' ? 'LIVE' : mode === 'demo' ? 'Демо-режим' : 'Нет связи'}</span>`;
+  conn.title = mode === 'live' ? 'Данные синхронизируются с Firebase' : mode === 'demo' ? 'Firebase не настроен: данные хранятся в этом браузере' : Data.error;
+  const p = Data.profile;
+  const r = D.role();
+  let user = '';
+  if (Data.isDemo()) {
+    user = `<label class="role-switch"><span class="sr-only">Демо-пользователь</span><select id="demoUser" aria-label="Демо-пользователь">
+      ${opts([['', 'Гость (без входа)'], ...Data.demoUsers().map((u) => [u.uid, `${ROLES[u.role] ? ROLES[u.role].label : u.role}: ${u.name}`])], p ? p.uid : '')}</select></label>`;
+  } else if (p) {
+    user = `<button type="button" class="user-chip" data-action="profile" title="Профиль">${icon(r === 'store' ? 'store' : r === 'dealer' ? 'truck' : r === 'admin' ? 'shield' : 'user')}
+      <span><b>${esc(p.name || p.email || 'Профиль')}</b><small>${esc(p.blocked ? 'Заблокирован' : ROLES[r].label)}</small></span></button>`;
+  } else if (Data.isLive()) {
+    user = `<button type="button" class="btn btn--primary btn--sm" data-action="login">${icon('login')}Войти</button>`;
+  }
+  $('#userBox').innerHTML = user;
+  const c = badgeCounts();
+  $('#cartBtn').innerHTML = icon('cart') + (c.cart ? `<span class="cart-count">${c.cart}</span>` : '');
+  $('#banner').innerHTML = p && p.blocked ? `<div class="banner banner--danger">${icon('ban')}Ваш аккаунт заблокирован администратором. Доступен только просмотр каталога.</div>`
+    : Data.mode === 'error' ? `<div class="banner banner--danger">${icon('alert')}${esc(Data.error)} <button type="button" class="btn btn--ghost btn--sm" data-action="reload">Повторить</button></div>`
+      : Data.isDemo() ? `<div class="banner">${icon('info')}Демо-режим: Firebase еще не подключен, данные хранятся только в этом браузере. Переключайте пользователей в шапке, чтобы проверить роли.</div>` : '';
+}
+
+function renderTabs() {
+  const c = badgeCounts();
+  $('#tabs').innerHTML = `<div class="tabs__inner">${ROLES[D.role()].tabs.map((t) => {
+    const n = c[t];
+    return `<button type="button" class="tab ${S.view === t ? 'is-active' : ''}" data-action="nav" data-view="${t}">${icon(TABS[t].icon)}<span>${TABS[t].label}</span>${n ? `<b>${n}</b>` : ''}</button>`;
+  }).join('')}</div>`;
+}
+
+/* --------------------------------- Вход -------------------------------- */
+function openLogin(mode = 'login') {
+  openModal(`<div class="auth">
+    <h2 id="modalTitle">${icon('login')}Вход в «${esc(D.companyName())}»</h2>
+    <p class="muted">При первом входе вы автоматически становитесь покупателем. Роль магазина, дилера или администратора назначает администратор.</p>
+    <button type="button" class="btn btn--dark btn--lg btn--block" data-action="login-google">${icon('user')}Войти через Google</button>
+    <div class="divider"><span>или по email</span></div>
+    <form id="authForm" data-mode="${mode}" class="stack" novalidate>
+      ${mode === 'register' ? '<label class="field"><span>Имя или название</span><input type="text" name="name" autocomplete="name" required></label>' : ''}
+      <label class="field"><span>Email</span><input type="email" name="email" autocomplete="username" required></label>
+      <label class="field"><span>Пароль</span><input type="password" name="password" autocomplete="${mode === 'register' ? 'new-password' : 'current-password'}" minlength="6" required></label>
+      <button type="submit" class="btn btn--primary btn--block">${mode === 'register' ? 'Зарегистрироваться' : 'Войти'}</button>
+    </form>
+    <div class="btn-row auth__links">
+      <button type="button" class="link" data-action="login" data-mode="${mode === 'register' ? 'login' : 'register'}">${mode === 'register' ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Регистрация'}</button>
+      ${mode === 'login' ? '<button type="button" class="link" data-action="login-reset">Забыли пароль?</button>' : ''}
+    </div></div>`);
+}
+
+const AUTH_ERRORS = {
+  'auth/invalid-credential': 'Неверный email или пароль', 'auth/wrong-password': 'Неверный пароль', 'auth/user-not-found': 'Пользователь не найден',
+  'auth/email-already-in-use': 'Этот email уже зарегистрирован', 'auth/weak-password': 'Пароль должен быть не короче 6 символов',
+  'auth/invalid-email': 'Некорректный email', 'auth/popup-closed-by-user': 'Окно входа закрыто', 'auth/unauthorized-domain': 'Домен сайта не добавлен в Firebase → Authentication → Authorized domains',
+  'auth/operation-not-allowed': 'Этот способ входа не включен в Firebase Authentication', 'auth/network-request-failed': 'Нет связи с сервером',
+};
+const authMsg = (e) => AUTH_ERRORS[e.code] || e.message;
+
+function openProfile() {
+  const p = Data.profile;
+  if (!p) return;
+  const r = D.role();
+  openModal(`<form id="profileForm" class="stack">
+    <h2 id="modalTitle">${icon('user')}Профиль</h2>
+    <dl class="kv"><dt>Роль</dt><dd>${esc(ROLES[r].label)}</dd><dt>Email</dt><dd>${esc(p.email || '—')}</dd></dl>
+    <label class="field"><span>${r === 'store' ? 'Название магазина' : 'Имя и фамилия'}</span><input type="text" name="name" value="${esc(p.name || '')}" ${r === 'store' ? 'readonly' : ''} required></label>
+    ${r === 'store' ? '<p class="note">Название магазина меняет администратор: по нему вам приходят отгрузки.</p>' : ''}
+    <label class="field"><span>Телефон (WhatsApp)</span><input type="tel" name="phone" value="${esc(p.phone || '')}" placeholder="+7 7__ ___ __ __"></label>
+    <div class="btn-row"><button type="submit" class="btn btn--primary">${icon('check')}Сохранить</button>
+      ${Data.isLive() ? `<button type="button" class="btn btn--ghost" data-action="logout">${icon('logout')}Выйти</button>` : ''}</div>
+  </form>`);
+}
+
+Object.assign(Actions, {
+  nav: (el) => go(el.dataset.view),
+  set: (el) => {
+    const path = el.dataset.path;
+    setPath(S, path, el.dataset.value);
+    const root = path.split('.')[0];
+    if (S[root] && typeof S[root] === 'object' && 'page' in S[root] && !path.endsWith('.page')) S[root].page = 1;
+    if (root === 'checkout') persistCheckout();
+    if (path === 'reports.period') { S.reports.from = ''; S.reports.to = ''; }
+    if (path === 'manage.tab') S.manage.page = 1;
+    renderView();
+  },
+  page: (el) => {
+    const key = el.dataset.key;
+    if (!S[key]) return;
+    S[key].page = num(el.dataset.page);
+    renderView();
+    if (['catalog', 'favView', 'crm'].includes(key)) window.scrollTo({ top: 0, behavior: 'smooth' });
+  },
+  step: (el) => { const i = $(el.dataset.target); if (i) i.value = Math.max(1, num(i.value) + num(el.dataset.delta)); },
+  'close-modal': () => closeModal(),
+  reload: () => location.reload(),
+  login: (el) => { if (Data.isLive()) openLogin(el.dataset.mode || 'login'); else toast('В демо-режиме выберите пользователя в шапке', 'info'); },
+  'login-google': async () => { try { await Data.signInGoogle(); closeModal(); toast('Вход выполнен', 'ok'); } catch (e) { toast(authMsg(e), 'error', 6000); } },
+  'login-reset': async () => {
+    const v = await formDialog('Восстановление пароля', '<label class="field"><span>Email</span><input type="email" name="email" required></label>', 'Отправить ссылку');
+    if (v) { try { await Data.resetPassword(v.email); toast('Письмо для сброса пароля отправлено', 'ok'); } catch (e) { toast(authMsg(e), 'error'); } }
+  },
+  logout: async () => { closeModal(); await Data.signOut(); S.view = 'catalog'; toast('Вы вышли', 'ok'); },
+  profile: () => openProfile(),
+});
+
+/* -------------------------------- События ------------------------------ */
+function onClick(e) {
+  const el = e.target.closest('[data-action]');
+  if (!el || el.disabled) return;
+  const fn = Actions[el.dataset.action];
+  if (!fn) return;
+  if (el.tagName === 'A') e.preventDefault();
+  Promise.resolve().then(() => fn(el, e)).catch((err) => { console.error(err); toast(err.message || String(err), 'error', 6000); });
+}
+
+function onInput(e) {
+  const t = e.target;
+  if (t.id === 'waText') { waTextEdited(t.value); return; }
+  if (t.form && t.form.id === 'productForm') { onProductInput(t); return; }
+  const path = t.dataset.bind;
+  if (!path) return;
+  setPath(S, path, t.type === 'checkbox' ? t.checked : t.value);
+  const [root, key] = path.split('.');
+  if (key !== 'page' && S[root] && typeof S[root] === 'object' && 'page' in S[root]) S[root].page = 1;
+  if (root === 'checkout') {
+    persistCheckout();
+    if (key === 'mode' || key === 'counterparty') renderView(); else syncCheckout();
+    return;
+  }
+  if (root === 'wa') { updateWa(); return; }
+  if (root === 'reports' && (key === 'from' || key === 'to')) S.reports.period = S.reports.from || S.reports.to ? 'custom' : 'all';
+  if (t.tagName === 'SELECT' || t.type === 'date') renderView(); else scheduleBody();
+}
+
+function guard(fn) { Promise.resolve().then(fn).catch((err) => { console.error(err); toast(err.message || String(err), 'error', 6000); }); }
+
+function onChange(e) {
+  const t = e.target;
+  if (t.id === 'demoUser') { Data.setDemoUser(t.value); S.view = 'catalog'; toast(t.value ? `Вы: ${t.options[t.selectedIndex].text}` : 'Вы гость', 'ok'); return; }
+  if (t.matches('[data-cart-qty]')) setCartQty(t.dataset.cartQty, t.value);
+  else if (t.matches('[data-crm-stage]')) guard(() => setStage(t.dataset.crmStage, t.value));
+  else if (t.matches('[data-user-role]')) guard(() => changeUserRole(t.dataset.userRole, t.value, t));
+  else if (t.id === 'importFile') { const f = t.files[0]; t.value = ''; guard(() => importFile(f)); }
+  else if (t.id === 'pfImageFile') onProductImage(t.files[0]);
+}
+
+function onSubmit(e) {
+  const f = e.target;
+  if (f.id === 'dlgForm') return;
+  e.preventDefault();
+  if (!f.checkValidity()) { f.reportValidity(); return; }
+  guard(async () => {
+    switch (f.id) {
+      case 'productForm': await submitProduct(f); break;
+      case 'stockForm': await submitStock(f); break;
+      case 'settingsForm': await submitSettings(f); break;
+      case 'requestForm': await submitRequest(f); break;
+      case 'profileForm': await Data.updateMyProfile({ name: f.name.value, phone: f.phone.value }); closeModal(); toast('Профиль сохранен', 'ok'); break;
+      case 'authForm': {
+        try {
+          if (f.dataset.mode === 'register') await Data.signUpEmail(f.name.value.trim(), f.email.value.trim(), f.password.value);
+          else await Data.signInEmail(f.email.value.trim(), f.password.value);
+          closeModal(); toast('Вход выполнен', 'ok');
+        } catch (err) { toast(authMsg(err), 'error', 6000); }
+        break;
+      }
+      default: break;
+    }
+  });
+}
+
+/* -------------------------------- Запуск ------------------------------- */
+async function boot() {
+  document.addEventListener('click', onClick);
+  document.addEventListener('input', onInput);
+  document.addEventListener('change', onChange);
+  document.addEventListener('submit', onSubmit);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+  window.addEventListener('afterprint', () => { $('#print-area').innerHTML = ''; });
+  $('#modalClose').innerHTML = icon('x');
+  const hash = location.hash.replace('#', '');
+  if (TABS[hash]) S.view = hash;
+  Data.on((what) => {
+    if (what === 'auth' || what === '*') invalidate();
+    scheduleRender();
+  });
+  render();
+  await Data.init();
+  render();
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
